@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/MarcosAAlbanoJunior/guardei/internal/search"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 // Button é um botão de resposta rápida sob uma mensagem. Data volta ao bot quando ele é tocado.
@@ -52,16 +53,42 @@ func (h *Handler) showPage(ctx context.Context, chatID int64, sess *searchSessio
 	if sess.shown == 0 && search.Dominant(sess.ranking.Scores) {
 		n = 1 // o primeiro vale bem mais que o segundo: mostra só ele; "Ver mais" traz o resto
 	}
-	from, to := sess.shown, min(sess.shown+n, len(ids))
-	items, err := h.Store.GetMany(ctx, sess.userID, ids[from:to])
-	if err != nil {
-		return err
+	from := sess.shown
+	var items []store.Item
+	for from < len(ids) && len(items) == 0 { // pula ids apagados desde a busca
+		to := min(from+n, len(ids))
+		var err error
+		if items, err = h.Store.GetMany(ctx, sess.userID, ids[from:to]); err != nil {
+			return err
+		}
+		if len(items) == 0 {
+			from = to
+		}
 	}
-	sess.shown = to
+	if len(items) == 0 {
+		sess.shown = len(ids)
+		h.Reply(ctx, chatID, "Não há mais resultados.")
+		return nil
+	}
 
-	header := pageHeader(sess, from+1, to)
-	h.sendWithButtons(ctx, chatID, formatItems(header, items, time.Now()), h.buttons(sess))
+	// A página só leva os itens que cabem numa mensagem; o resto fica para o "Ver mais".
+	now := time.Now()
+	items = items[:fitCount(items, now)]
+	first := from
+	sess.shown = indexOf(ids, items[len(items)-1].ID) + 1
+
+	header := pageHeader(sess, first+1, sess.shown)
+	h.sendWithButtons(ctx, chatID, formatItems(header, items, now), h.buttons(sess))
 	return nil
+}
+
+func indexOf(ids []int64, id int64) int {
+	for i, x := range ids {
+		if x == id {
+			return i
+		}
+	}
+	return len(ids) - 1
 }
 
 func emptyResultText(q search.Query) string {

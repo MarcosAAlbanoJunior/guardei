@@ -14,6 +14,10 @@ const (
 	maxSnippet = 90  // linha de um item em listas de resultados
 	maxSummary = 300 // resumo na confirmação de "Salvo"
 	maxTitle   = 80  // título guardado de um post
+
+	// maxMessage é o maior texto que o bot monta. O Telegram recusa mais de 4096
+	// caracteres; a folga cobre o que conta em dobro (emojis) e o cabeçalho.
+	maxMessage = 3800
 )
 
 const helpText = `Guardei: salve vídeos e posts e ache depois por busca.
@@ -81,11 +85,33 @@ func span(from, to int) string {
 	return fmt.Sprintf("%d–%d", from, to)
 }
 
+// itemBlock é o trecho de um item na lista: id, plataforma, idade, texto e link.
+func itemBlock(it store.Item, now time.Time) string {
+	return fmt.Sprintf("\n\n#%d · %s · %s\n%s\n%s", it.ID, it.Platform, age(it.CreatedAt, now), shorten(itemText(it), maxSnippet), it.URL)
+}
+
+// fitCount diz quantos dos primeiros itens cabem em uma mensagem (pelo menos
+// um, se houver). Links longos podem fazer 10 itens passarem do limite do Telegram.
+func fitCount(items []store.Item, now time.Time) int {
+	used := 300 // reserva para o cabeçalho
+	for i, it := range items {
+		used += len([]rune(itemBlock(it, now)))
+		if used > maxMessage && i > 0 {
+			return i
+		}
+	}
+	return len(items)
+}
+
+// formatItems junta o cabeçalho e os itens; nunca passa de maxMessage.
 func formatItems(header string, items []store.Item, now time.Time) string {
 	var b strings.Builder
 	b.WriteString(header)
 	for _, it := range items {
-		fmt.Fprintf(&b, "\n\n#%d · %s · %s\n%s\n%s", it.ID, it.Platform, age(it.CreatedAt, now), shorten(itemText(it), maxSnippet), it.URL)
+		b.WriteString(itemBlock(it, now))
+	}
+	if r := []rune(b.String()); len(r) > maxMessage { // um só item com link gigante
+		return string(r[:maxMessage-1]) + "…"
 	}
 	return b.String()
 }

@@ -2,6 +2,7 @@ package bot
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -250,5 +251,80 @@ func TestWithoutKeyboardSupportButtonsAreOmitted(t *testing.T) {
 	hn.h.Keyboard = nil
 	if got := hn.say("receita"); !strings.Contains(got, "Achei 8 itens") || hn.buttons != nil {
 		t.Fatalf("%s %+v", got, hn.buttons)
+	}
+}
+
+// telegramLimit é o tamanho máximo de uma mensagem no Telegram.
+const telegramLimit = 4096
+
+// O Telegram recusa mensagens acima de 4096 caracteres. Com links longos, uma
+// página de 10 itens passaria disso: a página deve mostrar só os que cabem, e o
+// "Ver mais" continua de onde parou, sem pular nem repetir itens.
+func TestPageIsCutToFitTelegramLimitWithoutLosingItems(t *testing.T) {
+	hn := newHarness(t)
+	long := strings.Repeat("a", 500)
+	var ids []int64
+	for i := 1; i <= 12; i++ {
+		hn.expect(fmt.Sprintf("https://example.com/%d?utm_campaign=%s nota do item %d", i, long, i), "Salvo")
+		ids = append(ids, hn.newest(1)[0].ID)
+	}
+
+	seen := map[int64]bool{}
+	collect := func(page string) int {
+		if n := len([]rune(page)); n > telegramLimit {
+			t.Fatalf("página com %d caracteres, acima do limite do Telegram", n)
+		}
+		got := 0
+		for _, id := range ids {
+			if strings.Contains(page, "\n#"+itoa(id)+" ·") {
+				if seen[id] {
+					t.Errorf("item #%d repetido", id)
+				}
+				seen[id], got = true, got+1
+			}
+		}
+		return got
+	}
+
+	page := hn.say("/recentes")
+	first := collect(page)
+	if first == 0 || first >= 10 {
+		t.Fatalf("a página deveria mostrar alguns, mas não todos os 10 itens: %d", first)
+	}
+	if !strings.Contains(page, fmt.Sprintf("mostrando 1–%d:", first)) {
+		t.Fatalf("o cabeçalho deve dizer quantos itens couberam (%d):\n%.200s", first, page)
+	}
+	for i := 0; i < 10 && hn.hasButton("Ver mais"); i++ {
+		collect(hn.tap(hn.button("Ver mais")))
+	}
+	if len(seen) != 12 {
+		t.Fatalf("as páginas cobrem %d de 12 itens", len(seen))
+	}
+}
+
+// Itens apagados depois da busca não quebram o "Ver mais".
+func TestMoreSkipsItemsDeletedAfterTheSearch(t *testing.T) {
+	hn := newHarness(t)
+	hn.seed("example.com", "receita de queijo", 8)
+	hn.say("receita")
+	more := hn.button("Ver mais")
+
+	// apaga 1 dos 3 itens que ainda não apareceram (o /apagar não altera a sessão da busca)
+	hn.expect("/apagar "+itoa(hn.h.sessions.m[1].ranking.IDs[6]), "apagado")
+	got := hn.tapOn(20, more)
+	if !strings.Contains(got, "Resultados 6–8 de 8:") || itemsIn(got) != 2 {
+		t.Fatalf("depois de apagar 1:\n%s", got)
+	}
+
+	// apaga todos os que faltam: nada mais a mostrar
+	hn2 := newHarness(t)
+	hn2.seed("example.com", "receita de queijo", 7)
+	hn2.say("receita")
+	more2 := hn2.button("Ver mais")
+	for _, id := range hn2.h.sessions.m[1].ranking.IDs[5:] {
+		hn2.expect("/apagar "+itoa(id), "apagado")
+	}
+	if got := hn2.tapOn(30, more2); !strings.Contains(got, "Não há mais resultados") {
+		t.Fatalf("%q", got)
 	}
 }
