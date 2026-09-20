@@ -42,7 +42,7 @@ Sobre custo e privacidade:
 
 ### 4. Suba o bot em uma VPS
 
-**Escolha a VPS.** Qualquer provedor serve. Peça uma máquina com **Ubuntu 24.04 (ou 22.04) ou Debian 12** e **1 GB de RAM**. O bot em si usa poucos MB, mas **a construção da imagem precisa de cerca de 1 GB** (veja "Problemas comuns" se sua VPS tem só 512 MB). O bot só faz conexões de saída, então **não precisa abrir nenhuma porta**.
+**Escolha a VPS.** Qualquer provedor serve. Peça uma máquina com **Ubuntu 24.04 (ou 22.04) ou Debian 12**, **1 GB de RAM** e **10 GB de disco**, que é o suficiente. O bot em si usa poucos MB, e a imagem se constrói com cerca de 512 MB de RAM (medido) e ocupa uns 530 MB de disco entre imagens e cache. Com 1 vCore, transcrever um vídeo demora mais do que num computador comum. O bot só faz conexões de saída, então **não precisa abrir nenhuma porta**.
 
 **4.1. Entre na VPS.** O provedor informa o IP e a senha (ou chave SSH). No terminal do seu computador (no Windows, use o PowerShell):
 
@@ -130,6 +130,7 @@ Rode os comandos dentro da pasta `guardei`:
 | Atualizar para a versão nova | `git pull && docker compose up -d --build` |
 | Trocar token, ID ou chave | edite o `.env` e rode `docker compose up -d --force-recreate` |
 | Parar | `docker compose stop` (para voltar: `docker compose start`) |
+| Liberar espaço em disco | `docker builder prune -f && docker image prune -f` (não apaga o banco) |
 | Fazer backup | veja [Backup](#backup) |
 
 > Cuidado: `docker compose down -v` **apaga o banco** com tudo que você salvou. Sem o `-v`, os dados ficam guardados.
@@ -141,7 +142,7 @@ Rode os comandos dentro da pasta `guardei`:
 | O bot não responde nada | Rode `docker compose logs --tail 50`. Se aparecer `usuário não autorizado user_id=NNN`, o seu ID não está em `ALLOWED_USER_IDS`: coloque esse número lá e recrie (`docker compose up -d --force-recreate`). Confira também se você tocou em **Iniciar** no bot. |
 | O bot para logo ao ligar | Token errado ou vazio no `.env`. Os logs mostram `error call getMe, unauthorized` (token inválido) ou `TELEGRAM_BOT_TOKEN é obrigatória` (vazio). |
 | Os logs mostram `ia=false` | A `GEMINI_API_KEY` está vazia ou com erro de digitação. Corrija o `.env` e recrie. |
-| A construção falha com `signal: killed` | Faltou memória (VPS de 512 MB). Crie um swap temporário e rode o `up` de novo: `fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`. No meu teste, com limite de 512 MB de RAM mais 1 GB de swap, a construção terminou em 45 s; sem swap, o compilador foi morto. |
+| A construção falha com `signal: killed` | Faltou memória (menos de ~512 MB livres para o compilador). Crie um swap temporário e rode o `up` de novo: `fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile`. |
 | Os logs repetem `Conflict: terminated by other getUpdates request` | Há outra cópia do bot usando o mesmo token (por exemplo no seu computador). Só uma instância por token: pare a outra. |
 | `docker: command not found` | Faltou o passo 4.2. |
 | Erros `429` do Gemini | Cota do plano gratuito esgotada. Espere alguns minutos ou ative o faturamento. |
@@ -293,11 +294,11 @@ Medidos com o container limitado a 512 MB:
 | RAM do bot ocioso ou buscando | 8 a 15 MB |
 | Pico durante uma transcrição | ~100 MB de processos (bot + `yt-dlp` ~81 MB, ou `ffmpeg` ~69 MB) |
 | Pico do container, contando cache de arquivos | 183 MiB, sem estourar o limite |
-| Construir a imagem | precisa de ~1 GB de RAM; com 512 MB só com swap (45 s no meu teste) |
+| Construir a imagem | cabe em 512 MB de RAM, sem swap (~1 min, medido com Podman); ~530 MB de disco entre imagens e cache, e cerca de +25 MB por atualização |
 
 Uma busca leva cerca de 0,3 s, quase toda na chamada ao Gemini para entender o texto; a comparação com milhares de itens leva alguns milissegundos (7 ms com 10 mil itens, 41 ms com 50 mil, medidos). "Ver mais" e os botões de período respondem em 1 ms.
 
-Só há uma extração de áudio por vez, e `yt-dlp` e `ffmpeg` rodam em sequência, por isso o pico não soma os dois. O uso normal é de poucos MB, mas uma extração passa dos 100 MB por alguns segundos. **Rodar** cabe em 512 MB; **construir** a imagem é que pede mais memória.
+Só há uma extração de áudio por vez, e `yt-dlp` e `ffmpeg` rodam em sequência, por isso o pico não soma os dois. O uso normal é de poucos MB, mas uma extração passa dos 100 MB por alguns segundos. Tanto **rodar** quanto **construir** a imagem cabem em 512 MB.
 
 ## Desenvolvimento
 

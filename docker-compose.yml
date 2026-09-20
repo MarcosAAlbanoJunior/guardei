@@ -7,6 +7,11 @@ services:
     volumes:
       - guardei-data:/data
     mem_limit: 512m # o alvo é rodar em uma VPS de 512 MB
+    logging: # sem isto, o log cresce sem limite e enche discos pequenos
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   guardei-data:
