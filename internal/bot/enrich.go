@@ -7,8 +7,8 @@ import (
 	"log/slog"
 	"strings"
 
-	"github.com/marcosjunior/guardei/internal/ai"
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 // applyNote troca a descrição de um item, refaz resumo e tags e reindexa.

@@ -8,10 +8,10 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/marcosjunior/guardei/internal/ai"
-	"github.com/marcosjunior/guardei/internal/extract"
-	"github.com/marcosjunior/guardei/internal/platform"
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/extract"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/platform"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 // link trata uma mensagem com link. Com texto junto, salva na hora; sem texto,

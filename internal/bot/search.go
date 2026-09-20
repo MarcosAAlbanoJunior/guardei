@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/marcosjunior/guardei/internal/search"
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/search"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 // search trata uma mensagem sem link como busca nos itens do usuário.

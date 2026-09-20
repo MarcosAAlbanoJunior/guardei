@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/marcosjunior/guardei/internal/platform"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/platform"
 )
 
 const (

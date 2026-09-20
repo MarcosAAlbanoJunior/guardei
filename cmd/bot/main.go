@@ -10,13 +10,13 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/marcosjunior/guardei/internal/ai"
-	"github.com/marcosjunior/guardei/internal/bot"
-	"github.com/marcosjunior/guardei/internal/config"
-	"github.com/marcosjunior/guardei/internal/extract"
-	"github.com/marcosjunior/guardei/internal/page"
-	"github.com/marcosjunior/guardei/internal/search"
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/bot"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/config"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/extract"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/page"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/search"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 func main() {

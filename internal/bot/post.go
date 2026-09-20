@@ -7,9 +7,9 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/marcosjunior/guardei/internal/ai"
-	"github.com/marcosjunior/guardei/internal/page"
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/page"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 const pageTimeout = 30 * time.Second

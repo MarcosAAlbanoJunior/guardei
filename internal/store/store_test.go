@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/marcosjunior/guardei/migrations"
+	"github.com/MarcosAAlbanoJunior/guardei/migrations"
 )
 
 func newStore(t *testing.T) *Store {

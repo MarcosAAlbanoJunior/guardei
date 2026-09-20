@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 func (h *Handler) command(ctx context.Context, userID, chatID int64, text string) error {

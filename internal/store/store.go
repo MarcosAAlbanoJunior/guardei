@@ -16,7 +16,7 @@ import (
 
 	_ "modernc.org/sqlite" // driver SQLite em Go puro, sem CGO
 
-	"github.com/marcosjunior/guardei/migrations"
+	"github.com/MarcosAAlbanoJunior/guardei/migrations"
 )
 
 // ErrNotFound indica que o item (ou a espera) não existe para aquele usuário.

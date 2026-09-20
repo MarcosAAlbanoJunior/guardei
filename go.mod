@@ -1,4 +1,4 @@
-module github.com/marcosjunior/guardei
+module github.com/MarcosAAlbanoJunior/guardei
 
 go 1.27.1
 

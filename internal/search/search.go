@@ -9,8 +9,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/marcosjunior/guardei/internal/ai"
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 const (

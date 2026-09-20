@@ -4,3 +4,6 @@
 *.db-shm
 *.db-wal
 .env
+
+# Documentos internos de planejamento: não fazem parte do projeto publicado.
+/docs/

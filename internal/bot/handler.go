@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcosjunior/guardei/internal/ai"
-	"github.com/marcosjunior/guardei/internal/extract"
-	"github.com/marcosjunior/guardei/internal/page"
-	"github.com/marcosjunior/guardei/internal/platform"
-	"github.com/marcosjunior/guardei/internal/search"
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/extract"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/page"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/platform"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/search"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 const (

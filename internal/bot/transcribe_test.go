@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcosjunior/guardei/internal/ai"
-	"github.com/marcosjunior/guardei/internal/extract"
-	"github.com/marcosjunior/guardei/internal/page"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/extract"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/page"
 )
 
 func TestYouTubeTranscribedAndSearchable(t *testing.T) {

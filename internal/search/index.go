@@ -6,7 +6,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/marcosjunior/guardei/internal/store"
+	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
 // Index mantém os embeddings em memória; a varredura é força-bruta.
