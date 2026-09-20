@@ -124,7 +124,16 @@ docker compose cp guardei:/data/backup.db "./backup-$(date +%F).db"
 
 **yt-dlp.** Ele quebra sempre que uma plataforma muda. O bot roda `yt-dlp -U` toda semana enquanto estiver no ar. Numa atualização da imagem, use `docker compose build --pull` e, se precisar de uma versão específica, `--build-arg YTDLP_VERSION=<versão>`.
 
-**Recursos.** A imagem tem cerca de 200 MB com `yt-dlp` e `ffmpeg`, e o `docker-compose.yml` limita o container a 512 MB. Só há uma extração de áudio por vez, para segurar a memória.
+**Recursos** (medidos em container com limite de 512 MB):
+
+| | Medido |
+| --- | --- |
+| Imagem, com `yt-dlp` e `ffmpeg` | ~199 MB |
+| RAM do bot ocioso ou buscando | 8 a 15 MB |
+| Pico durante uma transcrição | ~100 MB de processos (bot + `yt-dlp` ~81 MB, ou `ffmpeg` ~69 MB) |
+| Pico do container, contando cache de arquivos | 183 MiB, sem estourar o limite |
+
+Só há uma extração de áudio por vez, e `yt-dlp` e `ffmpeg` rodam em sequência, por isso o pico não soma os dois. O uso normal é de poucos MB, mas uma extração passa dos 100 MB por alguns segundos. Uma VPS de 512 MB dá conta, e uma de 256 MB provavelmente não.
 
 ## Desenvolvimento
 
