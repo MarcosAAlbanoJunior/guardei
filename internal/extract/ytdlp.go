@@ -98,12 +98,16 @@ func (y *YtDlp) Audio(ctx context.Context, u *url.URL) (AudioFile, error) {
 	out, err := y.run(dctx, y.Path,
 		"--no-playlist", "--no-warnings", "--no-progress",
 		"--max-filesize", "50M",
-		"-f", "bestaudio/best", "-x", "--audio-format", "mp3",
-		"--postprocessor-args", "ExtractAudio:-ac 1 -ar 16000 -b:a 32k",
-		"-o", filepath.Join(dir, "audio.%(ext)s"),
+		"-f", "bestaudio/best", "-x",
+		"-o", filepath.Join(dir, "raw.%(ext)s"),
 		"--", u.String())
 	if err != nil {
 		return AudioFile{}, fmt.Errorf("yt-dlp: %w: %s", err, lastLine(out))
+	}
+	// A conversão é nossa, não do yt-dlp: ele pula o pós-processamento quando o
+	// áudio já vem em mp3 (TikTok), e o arquivo ficava 4x maior que o previsto.
+	if err := y.convert(ctx, dir); err != nil {
+		return AudioFile{}, err
 	}
 
 	segments, err := y.segments(ctx, dir, dur)
@@ -111,6 +115,22 @@ func (y *YtDlp) Audio(ctx context.Context, u *url.URL) (AudioFile, error) {
 		return AudioFile{}, err
 	}
 	return AudioFile{Segments: segments, Mime: "audio/mp3", Duration: dur, Title: title}, nil
+}
+
+// convert transforma o áudio baixado em mp3 mono, 16 kHz, ~32 kbps (audio.mp3).
+func (y *YtDlp) convert(ctx context.Context, dir string) error {
+	raws, err := filepath.Glob(filepath.Join(dir, "raw.*"))
+	if err != nil || len(raws) == 0 {
+		return fmt.Errorf("áudio não baixado")
+	}
+	cctx, cancel := context.WithTimeout(ctx, splitTimeout)
+	defer cancel()
+	out, err := y.run(cctx, y.FFmpegPath, "-loglevel", "error", "-y", "-i", raws[0],
+		"-vn", "-ac", "1", "-ar", "16000", "-b:a", "32k", filepath.Join(dir, "audio.mp3"))
+	if err != nil {
+		return fmt.Errorf("ffmpeg (conversão): %w: %s", err, lastLine(out))
+	}
+	return nil
 }
 
 // segments lê o mp3 baixado e, se for longo, o fatia em pedaços sem reencodar.

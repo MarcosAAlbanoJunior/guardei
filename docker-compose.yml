@@ -1,0 +1,12 @@
+services:
+  guardei:
+    build: .
+    image: guardei:latest
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - guardei-data:/data
+    mem_limit: 512m # meta da spec: caber em VPS de 512 MB
+
+volumes:
+  guardei-data:

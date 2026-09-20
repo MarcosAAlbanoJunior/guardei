@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -15,6 +16,9 @@ import (
 // fakeRun imita o yt-dlp: --print devolve metadados; o download grava o mp3 no -o.
 func fakeRun(meta string, audio []byte, downloads *[]string) runner {
 	return func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ffmpeg" && !slices.Contains(args, "segment") { // conversão: grava o mp3 final
+			return nil, os.WriteFile(args[len(args)-1], audio, 0o600)
+		}
 		if name == "ffmpeg" { // fatia em 3 trechos, como o -f segment faria
 			dir := filepath.Dir(args[len(args)-1])
 			for i := 0; i < 3; i++ {
@@ -32,7 +36,8 @@ func fakeRun(meta string, audio []byte, downloads *[]string) runner {
 			if a == "-o" {
 				dir := filepath.Dir(args[i+1])
 				*downloads = append(*downloads, dir)
-				return nil, os.WriteFile(filepath.Join(dir, "audio.mp3"), audio, 0o600)
+				// o yt-dlp grava no formato nativo (aqui m4a), não em mp3
+				return nil, os.WriteFile(filepath.Join(dir, "raw.m4a"), []byte("cru"), 0o600)
 			}
 		}
 		return nil, errors.New("sem -o")
@@ -155,5 +160,30 @@ func TestSplitFailureIsAnError(t *testing.T) {
 	}
 	if _, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x")); err == nil || !strings.Contains(err.Error(), "ffmpeg") {
 		t.Fatal(err)
+	}
+}
+
+// Regressão: o yt-dlp não converte áudio que já vem em mp3 (TikTok); a
+// conversão para mono/16 kHz/32 kbps precisa ser feita sempre.
+func TestAlwaysConvertsWithFFmpeg(t *testing.T) {
+	var dl []string
+	y := newFake(`{"duration": 60, "title": "x", "is_live": false}`, []byte("convertido"), &dl)
+	var ffmpegArgs []string
+	base := y.run
+	y.run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "ffmpeg" {
+			ffmpegArgs = args
+		}
+		return base(ctx, name, args...)
+	}
+	af, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"))
+	if err != nil || string(af.Segments[0]) != "convertido" {
+		t.Fatalf("%v %q", err, af.Segments)
+	}
+	joined := strings.Join(ffmpegArgs, " ")
+	for _, want := range []string{"-ac 1", "-ar 16000", "-b:a 32k", "-vn"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("ffmpeg sem %q: %s", want, joined)
+		}
 	}
 }

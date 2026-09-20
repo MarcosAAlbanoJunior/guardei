@@ -17,11 +17,12 @@ const (
 )
 
 // Extract indica quais plataformas têm extração de áudio (flag `extract` da spec).
-// TikTok e X entram na Fase 4, depois de validar a extração no YouTube.
+// TikTok e X são "melhor esforço": o yt-dlp pode falhar sem aviso (IP bloqueado,
+// post protegido) e, nesse caso, o bot cai no pedido de descrição.
 var Extract = map[string]bool{
 	YouTube:   true,
-	TikTok:    false,
-	X:         false,
+	TikTok:    true,
+	X:         true,
 	Instagram: false,
 	Other:     false,
 }
