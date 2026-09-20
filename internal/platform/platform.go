@@ -17,10 +17,11 @@ const (
 )
 
 // Extract indica quais plataformas têm extração de áudio (flag `extract` da spec).
+// TikTok e X entram na Fase 4, depois de validar a extração no YouTube.
 var Extract = map[string]bool{
 	YouTube:   true,
-	TikTok:    true,
-	X:         true,
+	TikTok:    false,
+	X:         false,
 	Instagram: false,
 	Other:     false,
 }

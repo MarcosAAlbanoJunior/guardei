@@ -36,9 +36,22 @@ type Searcher struct {
 	Index *Index
 }
 
+// stopwords são palavras tão comuns em PT-BR que, num OR, fariam a consulta
+// casar com quase toda transcrição e enterrar o resultado certo.
+var stopwords = map[string]bool{}
+
+func init() {
+	for _, w := range strings.Fields(`a o as os um uma uns umas de da do das dos em na no nas nos por pra para com sem
+		e ou mas que se ao aos à às pelo pela pelos pelas sobre entre até como qual quais é são foi ser ter tem tá
+		eu tu ele ela nós vocês eles elas me te lhe meu minha seu sua isso isto esse essa este esta aquilo mais muito
+		já não sim só também quando onde vídeo video`) {
+		stopwords[w] = true
+	}
+}
+
 // BuildFTSQuery transforma texto livre em uma consulta FTS5 segura: cada termo
 // vira um prefixo entre aspas ("termo"*), unidos por OR. O ranking por bm25
-// ordena quem casa mais termos. Devolve "" se não sobrar termo útil.
+// ordena quem casa mais termos. Ignora stopwords. Devolve "" se não sobrar termo útil.
 func BuildFTSQuery(q string) string {
 	terms := strings.FieldsFunc(q, func(r rune) bool {
 		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
@@ -47,7 +60,7 @@ func BuildFTSQuery(q string) string {
 	var parts []string
 	for _, t := range terms {
 		t = strings.ToLower(t)
-		if len([]rune(t)) < 2 || seen[t] {
+		if len([]rune(t)) < 2 || stopwords[t] || seen[t] {
 			continue
 		}
 		seen[t] = true

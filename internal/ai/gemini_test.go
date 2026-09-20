@@ -126,3 +126,18 @@ func TestSpokenWords(t *testing.T) {
 		t.Fatal("spokenWords")
 	}
 }
+
+// Regressão: com "transcript" fora de required, o gemini-2.5-flash-lite devolvia
+// a transcrição vazia em vídeos com fala, e o vídeo era tratado como "sem fala".
+func TestSchemaRequiresTranscript(t *testing.T) {
+	req, _ := analysisSchema["required"].([]string)
+	for _, f := range []string{"has_speech", "transcript", "summary", "tags"} {
+		found := false
+		for _, r := range req {
+			found = found || r == f
+		}
+		if !found {
+			t.Errorf("%s deveria ser obrigatório no schema", f)
+		}
+	}
+}

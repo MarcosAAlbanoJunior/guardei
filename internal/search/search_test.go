@@ -12,11 +12,14 @@ import (
 
 func TestBuildFTSQuery(t *testing.T) {
 	got := BuildFTSQuery(`Receita de "pão" de queijo!! a`)
-	want := `"receita"* OR "de"* OR "pão"* OR "queijo"*`
+	want := `"receita"* OR "pão"* OR "queijo"*`
 	if got != want {
 		t.Errorf("got %s", got)
 	}
-	if BuildFTSQuery("? ! a") != "" {
+	if got := BuildFTSQuery("dicas para aprender a programar em casa"); got != `"dicas"* OR "aprender"* OR "programar"* OR "casa"*` {
+		t.Errorf("stopwords: %s", got)
+	}
+	if BuildFTSQuery("? ! a o que") != "" {
 		t.Error("esperava vazio")
 	}
 }

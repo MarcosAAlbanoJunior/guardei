@@ -39,7 +39,7 @@ var analysisSchema = map[string]any{
 		"summary":    map[string]any{"type": "STRING"},
 		"tags":       map[string]any{"type": "ARRAY", "items": map[string]any{"type": "STRING"}},
 	},
-	"required": []string{"has_speech", "summary", "tags"},
+	"required": []string{"has_speech", "transcript", "summary", "tags"},
 }
 
 type gemini struct {

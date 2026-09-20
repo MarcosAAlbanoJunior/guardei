@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/marcosjunior/guardei/internal/ai"
+	"github.com/marcosjunior/guardei/internal/extract"
 	"github.com/marcosjunior/guardei/internal/platform"
 	"github.com/marcosjunior/guardei/internal/search"
 	"github.com/marcosjunior/guardei/internal/store"
@@ -28,6 +30,7 @@ type Handler struct {
 	Store       *store.Store
 	AI          ai.AIClient
 	Searcher    *search.Searcher
+	Extractor   extract.Extractor
 	AIInfo      string // texto do /status, ex.: nomes dos modelos
 	Allowed     map[int64]bool
 	SearchLimit int
@@ -291,22 +294,93 @@ func (h *Handler) link(ctx context.Context, userID, chatID int64, raw, note stri
 	if note != "" {
 		return h.save(ctx, userID, chatID, raw, canonical, plat, note)
 	}
-	reason := h.manualReason(plat)
+	reason, err := h.transcribe(ctx, userID, chatID, raw, canonical, plat)
+	if err != nil || reason == "" {
+		return err // erro, ou salvo com a transcrição
+	}
 	if err := h.Store.SetPending(ctx, store.Pending{ChatID: chatID, URL: raw, Reason: reason}); err != nil {
 		return err
 	}
-	h.Reply(ctx, chatID, fmt.Sprintf("Não vou transcrever esse vídeo: %s.\nMe diga do que ele trata e eu guardo (ou /cancelar).", reason))
+	h.Reply(ctx, chatID, fmt.Sprintf("Não consegui transcrever esse vídeo: %s.\nMe diga do que ele trata e eu guardo (ou /cancelar).", reason))
 	return nil
 }
 
-func (h *Handler) manualReason(plat string) string {
+// transcribe tenta salvar o vídeo pela transcrição do áudio. Devolve "" quando
+// salvou, ou o motivo de cair no modo manual (que vira a pergunta ao usuário).
+func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, canonical, plat string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", err
+	}
+	if reason := h.manualReason(plat, u); reason != "" {
+		return reason, nil
+	}
+	h.Reply(ctx, chatID, "⏳ Baixando o áudio e transcrevendo…")
+
+	af, err := h.Extractor.Audio(ctx, u)
+	if err != nil {
+		slog.Warn("extração de áudio falhou", "url", raw, "err", err)
+		var tooLong *extract.TooLongError
+		switch {
+		case errors.As(err, &tooLong):
+			return fmt.Sprintf("o vídeo é longo demais (%s; o máximo é %s)", fmtDuration(tooLong.Duration), fmtDuration(tooLong.Max)), nil
+		case errors.Is(err, extract.ErrNoDuration):
+			return "não consegui saber a duração (transmissão ao vivo?)", nil
+		case errors.Is(err, extract.ErrTooLarge):
+			return "o áudio ficou grande demais", nil
+		}
+		return "não consegui baixar o áudio", nil
+	}
+
+	actx, cancel := context.WithTimeout(ctx, 2*aiTimeout)
+	defer cancel()
+	a, err := h.AI.AnalyzeAudio(actx, af.Data, af.Mime)
+	if err != nil {
+		slog.Warn("transcrição por IA falhou", "url", raw, "err", err)
+		return "a IA não conseguiu transcrever", nil
+	}
+	if !a.HasSpeech {
+		return "o vídeo não tem fala (só música ou ruído)", nil
+	}
+
+	it := store.Item{
+		UserID: userID, URL: raw, CanonicalURL: canonical, Platform: plat,
+		Title: af.Title, Transcript: a.Transcript, Summary: a.Summary, Tags: a.Tags, Source: "transcript",
+	}
+	id, err := h.Store.Insert(ctx, &it)
+	if err != nil {
+		return "", err
+	}
+	h.embed(ctx, userID, id, embedText(it))
+
+	msg := fmt.Sprintf("Salvo (#%d, %s, transcrito):", id, plat)
+	if it.Title != "" {
+		msg += "\n" + snippet(it.Title)
+	}
+	msg += "\n" + snippet(it.Summary)
+	if len(it.Tags) > 0 {
+		msg += "\nTags: " + strings.Join(it.Tags, ", ")
+	}
+	h.Reply(ctx, chatID, msg)
+	return "", nil
+}
+
+func fmtDuration(d time.Duration) string {
+	d = d.Round(time.Second)
+	return fmt.Sprintf("%d min %02d s", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+// manualReason devolve por que o vídeo nem chega a ser extraído ("" se pode tentar).
+func (h *Handler) manualReason(plat string, u *url.URL) string {
 	switch {
 	case !platform.Extract[plat]:
 		return "esta plataforma não tem extração de áudio"
 	case !h.AI.Enabled():
 		return "a IA não está ligada (sem GEMINI_API_KEY)"
+	case !h.Extractor.Supports(u):
+		return "o extrator de áudio (yt-dlp e ffmpeg) não está disponível"
 	}
-	return "a extração de áudio ainda não está disponível"
+	return ""
 }
 
 // describe trata a resposta do usuário a um pedido de descrição.

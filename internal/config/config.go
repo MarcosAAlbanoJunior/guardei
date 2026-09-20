@@ -18,6 +18,9 @@ type Config struct {
 	GeminiAPIKey         string // vazio liga o modo manual
 	GeminiModel          string
 	GeminiEmbeddingModel string
+
+	MaxVideoSeconds int
+	YtdlpPath       string
 }
 
 // Load lê o ambiente. Só TELEGRAM_BOT_TOKEN e ALLOWED_USER_IDS são obrigatórias.
@@ -29,6 +32,7 @@ func Load() (Config, error) {
 		GeminiAPIKey:         os.Getenv("GEMINI_API_KEY"),
 		GeminiModel:          envOr("GEMINI_MODEL", "gemini-2.5-flash-lite"),
 		GeminiEmbeddingModel: envOr("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2"),
+		YtdlpPath:            envOr("YTDLP_PATH", "yt-dlp"),
 		AllowedUsers:         map[int64]bool{},
 	}
 	if c.TelegramToken == "" {
@@ -50,6 +54,9 @@ func Load() (Config, error) {
 	}
 	var err error
 	if c.SearchLimit, err = envInt("SEARCH_LIMIT", 5); err != nil {
+		return c, err
+	}
+	if c.MaxVideoSeconds, err = envInt("MAX_VIDEO_SECONDS", 600); err != nil {
 		return c, err
 	}
 	return c, nil

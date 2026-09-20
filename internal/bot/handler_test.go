@@ -3,10 +3,13 @@ package bot
 import (
 	"context"
 	"errors"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/marcosjunior/guardei/internal/ai"
+	"github.com/marcosjunior/guardei/internal/extract"
 	"github.com/marcosjunior/guardei/internal/search"
 	"github.com/marcosjunior/guardei/internal/store"
 )
@@ -27,7 +30,7 @@ func newHarnessAI(t *testing.T, client ai.AIClient) *harness {
 	}
 	t.Cleanup(func() { st.Close() })
 	hn := &harness{t: t}
-	hn.h = &Handler{Store: st, AI: client, AIInfo: "fake",
+	hn.h = &Handler{Store: st, AI: client, AIInfo: "fake", Extractor: extract.Nop{},
 		Searcher: &search.Searcher{Store: st, AI: client, Index: search.NewIndex()},
 		Allowed:  map[int64]bool{1: true}, SearchLimit: 5,
 		Reply: func(_ context.Context, _ int64, text string) { hn.last = text }}
@@ -104,11 +107,17 @@ func TestUnauthorizedIgnored(t *testing.T) {
 }
 
 // fakeAI: resumo = "Resumo: "+texto; embeddings em 2 dimensões (comida, esporte).
-type fakeAI struct{ down bool }
+type fakeAI struct {
+	down  bool
+	audio ai.Analysis // resposta de AnalyzeAudio
+}
 
 func (fakeAI) Enabled() bool { return true }
-func (fakeAI) AnalyzeAudio(context.Context, []byte, string) (ai.Analysis, error) {
-	return ai.Analysis{}, nil
+func (f fakeAI) AnalyzeAudio(context.Context, []byte, string) (ai.Analysis, error) {
+	if f.down {
+		return ai.Analysis{}, errors.New("fora do ar")
+	}
+	return f.audio, nil
 }
 func (f fakeAI) AnalyzeText(_ context.Context, text string) (ai.Analysis, error) {
 	if f.down {
@@ -127,7 +136,7 @@ func (f fakeAI) Embed(_ context.Context, text string, _ ai.EmbedTask) ([]float32
 	case strings.Contains(t, "perna"), strings.Contains(t, "esporte"):
 		return []float32{0, 1}, nil
 	}
-	return []float32{0.1, 0.1}, nil
+	return []float32{0, 0}, nil // sem relação com nenhum conceito
 }
 
 func TestAISavesSummaryTagsAndFindsBySemantics(t *testing.T) {
@@ -164,4 +173,85 @@ func TestReindexWithoutAI(t *testing.T) {
 	hn := newHarness(t)
 	hn.expect("/reindexar", "desligada")
 	hn.expect("/status", "desligada")
+}
+
+// fakeExtractor: só YouTube; devolve o áudio ou o erro configurado.
+type fakeExtractor struct {
+	err   error
+	calls int
+}
+
+func (*fakeExtractor) Supports(u *url.URL) bool { return strings.Contains(u.Host, "youtu") }
+func (f *fakeExtractor) Audio(context.Context, *url.URL) (extract.AudioFile, error) {
+	f.calls++
+	if f.err != nil {
+		return extract.AudioFile{}, f.err
+	}
+	return extract.AudioFile{Data: []byte("mp3"), Mime: "audio/mp3", Title: "Como fazer pão de queijo"}, nil
+}
+
+func speech() ai.Analysis {
+	return ai.Analysis{HasSpeech: true, Transcript: "hoje vamos fazer pão de queijo",
+		Summary: "Passo a passo de pão de queijo.", Tags: []string{"receita", "pão de queijo"}}
+}
+
+func TestYouTubeTranscribedAndSearchable(t *testing.T) {
+	ex := &fakeExtractor{}
+	hn := newHarnessAI(t, fakeAI{audio: speech()})
+	hn.h.Extractor = ex
+	hn.expect("https://youtu.be/abc", "Salvo (#1, youtube, transcrito)")
+	hn.expect("/recentes", "Como fazer pão de queijo")
+	hn.expect("comida", "#1") // busca semântica sobre título/resumo/tags
+	hn.expect("hoje vamos fazer", "#1")
+	// não ficou nada em espera: a próxima mensagem sem link é busca
+	hn.expect("bola", "Não achei nada")
+	// repetido: não baixa de novo
+	hn.expect("https://youtu.be/abc", "já está salvo")
+	if ex.calls != 1 {
+		t.Fatalf("extraiu %d vezes", ex.calls)
+	}
+}
+
+func TestTranscribeFallbacksAskForDescription(t *testing.T) {
+	cases := []struct {
+		name string
+		ex   *fakeExtractor
+		ai   fakeAI
+		want string
+	}{
+		{"longo", &fakeExtractor{err: &extract.TooLongError{Duration: 20 * time.Minute, Max: 10 * time.Minute}}, fakeAI{audio: speech()}, "longo demais (20 min 00 s; o máximo é 10 min 00 s)"},
+		{"ao vivo", &fakeExtractor{err: extract.ErrNoDuration}, fakeAI{audio: speech()}, "transmissão ao vivo"},
+		{"download falhou", &fakeExtractor{err: errors.New("yt-dlp quebrou")}, fakeAI{audio: speech()}, "não consegui baixar o áudio"},
+		{"sem fala", &fakeExtractor{}, fakeAI{audio: ai.Analysis{HasSpeech: false}}, "não tem fala"},
+		{"IA caiu", &fakeExtractor{}, fakeAI{down: true}, "a IA não conseguiu transcrever"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			hn := newHarnessAI(t, c.ai)
+			hn.h.Extractor = c.ex
+			hn.expect("https://youtu.be/abc", c.want)
+			hn.expect("https://youtu.be/abc", "Me diga do que ele trata")
+			// o usuário descreve e o fluxo manual segue normal
+			hn.expect("vídeo de receita", "Salvo (#1, youtube)")
+		})
+	}
+}
+
+func TestNoteWithLinkSkipsTranscription(t *testing.T) {
+	ex := &fakeExtractor{}
+	hn := newHarnessAI(t, fakeAI{audio: speech()})
+	hn.h.Extractor = ex
+	hn.expect("https://youtu.be/abc minha descrição", "Salvo (#1, youtube)")
+	if ex.calls != 0 {
+		t.Fatal("não deveria extrair quando há descrição")
+	}
+}
+
+func TestNoExtractionWithoutAIOrExtractor(t *testing.T) {
+	hn := newHarness(t) // IA desligada, extrator Nop
+	hn.h.Extractor = &fakeExtractor{}
+	hn.expect("https://youtu.be/abc", "sem GEMINI_API_KEY")
+
+	hn2 := newHarnessAI(t, fakeAI{audio: speech()}) // IA ligada, extrator Nop
+	hn2.expect("https://youtu.be/abc", "yt-dlp e ffmpeg")
 }
