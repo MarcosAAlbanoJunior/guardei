@@ -2,8 +2,11 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"testing"
+
+	"github.com/marcosjunior/guardei/migrations"
 )
 
 func newStore(t *testing.T) *Store {
@@ -74,5 +77,55 @@ func TestPending(t *testing.T) {
 	}
 	if ok, _ := s.ClearPending(ctx, 9); !ok {
 		t.Fatal("deveria ter limpado")
+	}
+}
+
+func TestPendingItemID(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	s.SetPending(ctx, Pending{ChatID: 1, URL: "u", ItemID: 42})
+	p, err := s.GetPending(ctx, 1)
+	if err != nil || p.ItemID != 42 || p.Reason != "" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	// substituir por uma espera de link novo zera o item
+	s.SetPending(ctx, Pending{ChatID: 1, URL: "u2", Reason: "sem chave"})
+	if p, _ = s.GetPending(ctx, 1); p.ItemID != 0 || p.Reason != "sem chave" {
+		t.Fatalf("%+v", p)
+	}
+}
+
+// Um banco criado antes da coluna item_id guardava "atualizar:<id>" em reason.
+func TestMigrationConvertsLegacyPending(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/legacy.db"
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := migrations.FS.ReadFile("0001_init.sql")
+	for _, q := range []string{
+		string(first),
+		`CREATE TABLE schema_migrations (name TEXT PRIMARY KEY)`,
+		`INSERT INTO schema_migrations VALUES ('0001_init.sql')`,
+		`INSERT INTO pending VALUES (1, 'u1', 'atualizar:7', 0)`,
+		`INSERT INTO pending VALUES (2, 'u2', 'esta plataforma não tem extração', 0)`,
+	} {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	db.Close()
+
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	if p, _ := s.GetPending(ctx, 1); p.ItemID != 7 || p.Reason != "" {
+		t.Fatalf("legado não convertido: %+v", p)
+	}
+	if p, _ := s.GetPending(ctx, 2); p.ItemID != 0 || p.Reason == "" {
+		t.Fatalf("espera de link novo alterada: %+v", p)
 	}
 }

@@ -71,21 +71,8 @@ func (s *Store) AllVectors(ctx context.Context) ([]VectorRow, error) {
 
 // WithoutEmbedding lista os itens do usuário ainda sem vetor.
 func (s *Store) WithoutEmbedding(ctx context.Context, userID int64) ([]Item, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return s.queryItems(ctx,
 		`SELECT `+itemCols+` FROM items WHERE user_id = ? AND embedding IS NULL ORDER BY id`, userID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Item
-	for rows.Next() {
-		it, err := scanItem(rows)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, it)
-	}
-	return out, rows.Err()
 }
 
 func (s *Store) CountEmbedded(ctx context.Context, userID int64) (int, error) {

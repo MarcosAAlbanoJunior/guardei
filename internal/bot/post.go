@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/marcosjunior/guardei/internal/ai"
@@ -13,10 +12,7 @@ import (
 	"github.com/marcosjunior/guardei/internal/store"
 )
 
-const (
-	pageTimeout = 30 * time.Second
-	maxTitle    = 80
-)
+const pageTimeout = 30 * time.Second
 
 func (h *Handler) pages() page.Reader {
 	if h.Pages == nil {
@@ -66,7 +62,7 @@ func (h *Handler) readPost(ctx context.Context, userID, chatID int64, raw, canon
 	// e já entra no índice full-text.
 	it := store.Item{
 		UserID: userID, URL: raw, CanonicalURL: canonical, Platform: plat,
-		Title: truncateRunes(title, maxTitle), Transcript: pg.Text, Summary: a.Summary, Tags: a.Tags, Source: "page",
+		Title: shorten(title, maxTitle), Transcript: pg.Text, Summary: a.Summary, Tags: a.Tags, Source: "page",
 	}
 	id, err := h.Store.Insert(ctx, &it)
 	if err != nil {
@@ -74,25 +70,10 @@ func (h *Handler) readPost(ctx context.Context, userID, chatID int64, raw, canon
 	}
 	h.embed(ctx, userID, id, embedText(it))
 
-	msg := fmt.Sprintf("Salvo (#%d, %s, post):", id, plat)
-	if it.Title != "" {
-		msg += "\n" + snippet(it.Title)
-	}
-	msg += "\n" + snippet(it.Summary)
-	if len(it.Tags) > 0 {
-		msg += "\nTags: " + strings.Join(it.Tags, ", ")
-	}
+	msg := savedMessage(id, plat, "post", it.Title, it.Summary, it.Tags)
 	if pg.Partial {
 		msg += fmt.Sprintf("\n⚠️ O site só entregou o começo do texto. Use /editar %d para completar.", id)
 	}
 	h.Reply(ctx, chatID, msg)
 	return "", nil
-}
-
-func truncateRunes(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
-	if r := []rune(s); len(r) > n {
-		return string(r[:n-1]) + "…"
-	}
-	return s
 }

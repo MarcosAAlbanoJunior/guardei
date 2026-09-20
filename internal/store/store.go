@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -42,12 +43,6 @@ type Item struct {
 type Hit struct {
 	Item  Item
 	Score float64 // bm25: quanto menor (mais negativo), melhor
-}
-
-type Pending struct {
-	ChatID int64
-	URL    string
-	Reason string
 }
 
 // Open abre (ou cria) o banco em path e aplica as migrações.
@@ -115,6 +110,9 @@ func (s *Store) migrate(ctx context.Context) error {
 }
 
 const itemCols = `id, user_id, url, canonical_url, platform, title, user_note, transcript, summary, tags, source, created_at`
+
+// itemColsJoined é itemCols qualificado com "items.", para consultas com JOIN.
+var itemColsJoined = "items." + strings.ReplaceAll(itemCols, ", ", ", items.")
 
 type scanner interface{ Scan(...any) error }
 
@@ -198,8 +196,13 @@ func (s *Store) affect(res sql.Result, err error) error {
 }
 
 func (s *Store) Recent(ctx context.Context, userID int64, n int) ([]Item, error) {
-	rows, err := s.db.QueryContext(ctx,
+	return s.queryItems(ctx,
 		`SELECT `+itemCols+` FROM items WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`, userID, n)
+}
+
+// queryItems roda uma consulta que devolve as colunas de itemCols.
+func (s *Store) queryItems(ctx context.Context, query string, args ...any) ([]Item, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -224,7 +227,7 @@ func (s *Store) Count(ctx context.Context, userID int64) (int, error) {
 // SearchFTS roda uma consulta MATCH já montada, ordenada por bm25.
 func (s *Store) SearchFTS(ctx context.Context, userID int64, match string, limit int) ([]Hit, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+prefixed("items", itemCols)+`, bm25(items_fts)
+		`SELECT `+itemColsJoined+`, bm25(items_fts)
 		   FROM items_fts JOIN items ON items.id = items_fts.rowid
 		  WHERE items_fts MATCH ? AND items.user_id = ?
 		  ORDER BY bm25(items_fts) LIMIT ?`, match, userID, limit)
@@ -241,51 +244,4 @@ func (s *Store) SearchFTS(ctx context.Context, userID int64, match string, limit
 		out = append(out, h)
 	}
 	return out, rows.Err()
-}
-
-func prefixed(table, cols string) string {
-	out := ""
-	start := 0
-	for i := 0; i <= len(cols); i++ {
-		if i == len(cols) || cols[i] == ',' {
-			col := cols[start:i]
-			for len(col) > 0 && col[0] == ' ' {
-				col = col[1:]
-			}
-			if out != "" {
-				out += ", "
-			}
-			out += table + "." + col
-			start = i + 1
-		}
-	}
-	return out
-}
-
-// SetPending guarda (ou substitui) a espera por descrição do chat.
-func (s *Store) SetPending(ctx context.Context, p Pending) error {
-	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO pending (chat_id, url, reason, created_at) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(chat_id) DO UPDATE SET url = excluded.url, reason = excluded.reason, created_at = excluded.created_at`,
-		p.ChatID, p.URL, p.Reason, time.Now().Unix())
-	return err
-}
-
-func (s *Store) GetPending(ctx context.Context, chatID int64) (Pending, error) {
-	p := Pending{ChatID: chatID}
-	err := s.db.QueryRowContext(ctx, `SELECT url, reason FROM pending WHERE chat_id = ?`, chatID).Scan(&p.URL, &p.Reason)
-	if errors.Is(err, sql.ErrNoRows) {
-		return p, ErrNotFound
-	}
-	return p, err
-}
-
-// ClearPending devolve true se havia espera para encerrar.
-func (s *Store) ClearPending(ctx context.Context, chatID int64) (bool, error) {
-	res, err := s.db.ExecContext(ctx, `DELETE FROM pending WHERE chat_id = ?`, chatID)
-	if err != nil {
-		return false, err
-	}
-	n, _ := res.RowsAffected()
-	return n > 0, nil
 }

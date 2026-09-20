@@ -18,10 +18,12 @@ const (
 	// gemini-embedding-2: relevantes ficam em 0,67–0,79 e irrelevantes até 0,62.
 	MinCosine = 0.65
 
-	rrfK          = 60 // constante clássica do reciprocal rank fusion
-	candidates    = 20
-	embedTimeout  = 15 * time.Second
-	singleWinnerX = 1.5
+	rrfK         = 60 // constante clássica do reciprocal rank fusion
+	candidates   = 20
+	embedTimeout = 15 * time.Second
+
+	// singleWinnerRatio: o primeiro resultado sozinho, se valer 1,5x o segundo.
+	singleWinnerRatio = 1.5
 )
 
 // Result é um resultado de busca; Score maior é melhor.
@@ -48,6 +50,12 @@ func init() {
 		stopwords[w] = true
 	}
 }
+
+// Remember guarda o vetor de um item no índice em memória.
+func (s *Searcher) Remember(userID, id int64, v []float32) { s.Index.Set(userID, id, v) }
+
+// Forget tira um item do índice em memória (apagado ou com vetor desatualizado).
+func (s *Searcher) Forget(id int64) { s.Index.Remove(id) }
 
 // BuildFTSQuery transforma texto livre em uma consulta FTS5 segura: cada termo
 // vira um prefixo entre aspas ("termo"*), unidos por OR. O ranking por bm25
@@ -81,7 +89,7 @@ func (s *Searcher) Search(ctx context.Context, userID int64, query string, limit
 		}
 	}
 
-	var vec []scored
+	var vec []Neighbor
 	if s.AI != nil && s.AI.Enabled() && s.Index != nil && s.Index.Len() > 0 {
 		ectx, cancel := context.WithTimeout(ctx, embedTimeout)
 		q, err := s.AI.Embed(ectx, query, ai.TaskQuery)
@@ -104,7 +112,7 @@ func (s *Searcher) Search(ctx context.Context, userID int64, query string, limit
 }
 
 // fuse une os dois rankings por reciprocal rank fusion.
-func (s *Searcher) fuse(ctx context.Context, userID int64, fts []store.Hit, vec []scored, limit int) ([]Result, error) {
+func (s *Searcher) fuse(ctx context.Context, userID int64, fts []store.Hit, vec []Neighbor, limit int) ([]Result, error) {
 	score := map[int64]float64{}
 	items := map[int64]store.Item{}
 	for i, h := range fts {
@@ -154,7 +162,7 @@ func Pick(r []Result) []Result {
 	if len(r) < 2 || r[1].Score <= 0 {
 		return r
 	}
-	if r[0].Score >= singleWinnerX*r[1].Score {
+	if r[0].Score >= singleWinnerRatio*r[1].Score {
 		return r[:1]
 	}
 	return r

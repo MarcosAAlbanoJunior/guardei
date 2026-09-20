@@ -21,7 +21,8 @@ type entry struct {
 	norm   float64
 }
 
-type scored struct {
+// Neighbor é um item vizinho da consulta e sua similaridade de cosseno.
+type Neighbor struct {
 	ID     int64
 	Cosine float64
 }
@@ -70,13 +71,13 @@ func (ix *Index) Len() int {
 }
 
 // Nearest devolve até limit itens do usuário com cosseno >= minCosine, do maior para o menor.
-func (ix *Index) Nearest(userID int64, q []float32, limit int, minCosine float64) []scored {
+func (ix *Index) Nearest(userID int64, q []float32, limit int, minCosine float64) []Neighbor {
 	qe := newEntry(userID, q)
 	if qe.norm == 0 {
 		return nil
 	}
 	ix.mu.RLock()
-	var out []scored
+	var out []Neighbor
 	for id, e := range ix.rows {
 		if e.userID != userID || e.norm == 0 || len(e.vec) != len(q) {
 			continue
@@ -86,7 +87,7 @@ func (ix *Index) Nearest(userID int64, q []float32, limit int, minCosine float64
 			dot += float64(x) * float64(q[i])
 		}
 		if c := dot / (e.norm * qe.norm); c >= minCosine {
-			out = append(out, scored{id, c})
+			out = append(out, Neighbor{id, c})
 		}
 	}
 	ix.mu.RUnlock()

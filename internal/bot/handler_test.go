@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -18,6 +19,7 @@ import (
 type harness struct {
 	t    *testing.T
 	h    *Handler
+	mu   sync.Mutex
 	last string
 	all  []string // todas as respostas, em ordem
 }
@@ -35,7 +37,12 @@ func newHarnessAI(t *testing.T, client ai.AIClient) *harness {
 	hn.h = &Handler{Store: st, AI: client, AIInfo: "fake", Extractor: extract.Nop{},
 		Searcher: &search.Searcher{Store: st, AI: client, Index: search.NewIndex()},
 		Allowed:  map[int64]bool{1: true}, SearchLimit: 5,
-		Reply: func(_ context.Context, _ int64, text string) { hn.last = text; hn.all = append(hn.all, text) }}
+		Reply: func(_ context.Context, _ int64, text string) {
+			hn.mu.Lock()
+			defer hn.mu.Unlock()
+			hn.last = text
+			hn.all = append(hn.all, text)
+		}}
 	return hn
 }
 
@@ -462,4 +469,61 @@ func TestVideoDownloadFailureThenReadsPost(t *testing.T) {
 	if !hn.said("Baixando o áudio") || !hn.said("Lendo o post") {
 		t.Fatalf("%q", hn.all)
 	}
+}
+
+// Mensagens do mesmo chat são tratadas uma de cada vez, na ordem em que a trava é obtida.
+func TestSameChatMessagesAreSerialized(t *testing.T) {
+	hn := newHarness(t)
+	inside, release := make(chan struct{}), make(chan struct{})
+	hn.h.Reply = func(_ context.Context, _ int64, text string) {
+		hn.mu.Lock()
+		hn.all = append(hn.all, text)
+		hn.mu.Unlock()
+		if strings.Contains(text, "Comando desconhecido") { // 1ª mensagem: segura a trava
+			close(inside)
+			<-release
+		}
+	}
+
+	done := make(chan struct{})
+	go func() { hn.h.Handle(context.Background(), 1, 1, "/xyz"); done <- struct{}{} }()
+	<-inside
+	go func() { hn.h.Handle(context.Background(), 1, 1, "/status"); done <- struct{}{} }()
+
+	time.Sleep(50 * time.Millisecond)
+	hn.mu.Lock()
+	n := len(hn.all)
+	hn.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("a 2ª mensagem do mesmo chat rodou antes de a 1ª terminar: %q", hn.all)
+	}
+	close(release)
+	<-done
+	<-done
+	if len(hn.all) != 2 || !strings.Contains(hn.all[1], "IA:") {
+		t.Fatalf("%q", hn.all)
+	}
+}
+
+// Chats diferentes não se bloqueiam.
+func TestDifferentChatsRunConcurrently(t *testing.T) {
+	hn := newHarness(t)
+	hn.h.Allowed[2] = true
+	inside, release := make(chan struct{}), make(chan struct{})
+	hn.h.Reply = func(_ context.Context, chatID int64, text string) {
+		if chatID == 1 {
+			close(inside)
+			<-release
+		}
+	}
+	go hn.h.Handle(context.Background(), 1, 1, "/status")
+	<-inside
+	finished := make(chan struct{})
+	go func() { hn.h.Handle(context.Background(), 2, 2, "/status"); close(finished) }()
+	select {
+	case <-finished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("o chat 2 ficou preso esperando o chat 1")
+	}
+	close(release)
 }
