@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -29,9 +30,13 @@ func TestLiveTranscription(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer st.Close()
+	maxSec := 600
+	if v, err := strconv.Atoi(os.Getenv("LIVE_MAX_SECONDS")); err == nil {
+		maxSec = v
+	}
 	client := ai.New(key, "gemini-2.5-flash-lite", "gemini-embedding-2")
 	var last string
-	h := &Handler{Store: st, AI: client, Extractor: extract.NewYtDlp("yt-dlp", 600*time.Second),
+	h := &Handler{Store: st, AI: client, Extractor: extract.NewYtDlp("yt-dlp", time.Duration(maxSec)*time.Second),
 		Searcher: &search.Searcher{Store: st, AI: client, Index: search.NewIndex()},
 		Allowed:  map[int64]bool{1: true}, SearchLimit: 5,
 		Reply: func(_ context.Context, _ int64, text string) { last = text; t.Log(text) }}

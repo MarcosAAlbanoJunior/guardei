@@ -112,6 +112,13 @@ type fakeAI struct {
 	audio ai.Analysis // resposta de AnalyzeAudio
 }
 
+func (f fakeAI) AnalyzeTranscript(_ context.Context, t string) (ai.Analysis, error) {
+	if f.down {
+		return ai.Analysis{}, errors.New("fora do ar")
+	}
+	return ai.Analysis{Summary: "Resumo geral da transcrição", Tags: []string{"longo"}}, nil
+}
+
 func (fakeAI) Enabled() bool { return true }
 func (f fakeAI) AnalyzeAudio(context.Context, []byte, string) (ai.Analysis, error) {
 	if f.down {
@@ -177,8 +184,9 @@ func TestReindexWithoutAI(t *testing.T) {
 
 // fakeExtractor: só YouTube; devolve o áudio ou o erro configurado.
 type fakeExtractor struct {
-	err   error
-	calls int
+	err      error
+	calls    int
+	segments int // 0 = um só
 }
 
 func (*fakeExtractor) Supports(u *url.URL) bool { return strings.Contains(u.Host, "youtu") }
@@ -187,7 +195,8 @@ func (f *fakeExtractor) Audio(context.Context, *url.URL) (extract.AudioFile, err
 	if f.err != nil {
 		return extract.AudioFile{}, f.err
 	}
-	return extract.AudioFile{Data: []byte("mp3"), Mime: "audio/mp3", Title: "Como fazer pão de queijo"}, nil
+	n := max(f.segments, 1)
+	return extract.AudioFile{Segments: make([][]byte, n), Mime: "audio/mp3", Title: "Como fazer pão de queijo"}, nil
 }
 
 func speech() ai.Analysis {
@@ -254,4 +263,16 @@ func TestNoExtractionWithoutAIOrExtractor(t *testing.T) {
 
 	hn2 := newHarnessAI(t, fakeAI{audio: speech()}) // IA ligada, extrator Nop
 	hn2.expect("https://youtu.be/abc", "yt-dlp e ffmpeg")
+}
+
+func TestLongVideoIsTranscribedInSegments(t *testing.T) {
+	ex := &fakeExtractor{segments: 5}
+	hn := newHarnessAI(t, fakeAI{audio: speech()})
+	hn.h.Extractor = ex
+	hn.expect("https://youtu.be/abc", "Resumo geral da transcrição")
+	items, _ := hn.h.Store.Recent(context.Background(), 1, 1)
+	// 5 trechos iguais concatenados: a transcrição guardada é a completa.
+	if got := strings.Count(items[0].Transcript, "hoje vamos fazer pão de queijo"); got != 5 || items[0].Source != "transcript" {
+		t.Fatalf("transcrição com %d trechos: %q", got, items[0].Transcript)
+	}
 }

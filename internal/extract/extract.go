@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// AudioFile é o áudio pronto para a IA: mp3 mono, com duração e tamanho já validados.
+// AudioFile é o áudio pronto para a IA: mp3 mono, com duração e tamanho já
+// validados, fatiado em pedaços de até ~5 min (um só, se o vídeo for curto).
 type AudioFile struct {
-	Data     []byte
+	Segments [][]byte
 	Mime     string
 	Duration time.Duration
 	Title    string

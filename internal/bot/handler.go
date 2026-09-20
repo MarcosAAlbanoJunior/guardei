@@ -332,9 +332,7 @@ func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, can
 		return "não consegui baixar o áudio", nil
 	}
 
-	actx, cancel := context.WithTimeout(ctx, 2*aiTimeout)
-	defer cancel()
-	a, err := h.AI.AnalyzeAudio(actx, af.Data, af.Mime)
+	a, err := ai.AnalyzeSegments(ctx, h.AI, af.Segments, af.Mime)
 	if err != nil {
 		slog.Warn("transcrição por IA falhou", "url", raw, "err", err)
 		return "a IA não conseguiu transcrever", nil

@@ -18,6 +18,12 @@ const (
 	defaultBaseURL = "https://generativelanguage.googleapis.com/v1beta"
 	// EmbeddingDims: 768 mantém cerca de 3 KB por item.
 	EmbeddingDims = 768
+
+	// Tetos de saída: um pedaço de 5 min de fala gasta ~1,5 mil tokens. O teto
+	// folgado não atrapalha e limita o custo se o modelo entrar em repetição
+	// (medido: 65 mil tokens numa transcrição de 25 min sem fatiar).
+	maxAudioOutputTokens = 8192
+	maxTextOutputTokens  = 2048
 )
 
 const systemPrompt = `Você organiza uma biblioteca pessoal de vídeos salvos, para o dono achá-los depois por busca.
@@ -42,6 +48,17 @@ var analysisSchema = map[string]any{
 	"required": []string{"has_speech", "transcript", "summary", "tags"},
 }
 
+// textSchema não tem transcript: com ele obrigatório, o modelo reescreve o texto
+// de entrada inteiro na saída (medido: estourou 2.048 tokens numa transcrição de 25 min).
+var textSchema = map[string]any{
+	"type": "OBJECT",
+	"properties": map[string]any{
+		"summary": map[string]any{"type": "STRING"},
+		"tags":    map[string]any{"type": "ARRAY", "items": map[string]any{"type": "STRING"}},
+	},
+	"required": []string{"summary", "tags"},
+}
+
 type gemini struct {
 	key, model, embModel string
 	baseURL              string
@@ -56,12 +73,19 @@ func newGemini(key, model, embModel string) *gemini {
 func (g *gemini) Enabled() bool { return true }
 
 func (g *gemini) AnalyzeText(ctx context.Context, text string) (Analysis, error) {
-	parts := []any{map[string]any{"text": "Descrição escrita pelo dono do vídeo:\n" + text}}
-	a, err := g.generate(ctx, parts)
+	return g.analyzeText(ctx, "Descrição escrita pelo dono do vídeo:\n"+text)
+}
+
+func (g *gemini) AnalyzeTranscript(ctx context.Context, transcript string) (Analysis, error) {
+	return g.analyzeText(ctx, "Transcrição do áudio do vídeo:\n"+transcript)
+}
+
+func (g *gemini) analyzeText(ctx context.Context, prompt string) (Analysis, error) {
+	a, err := g.generate(ctx, []any{map[string]any{"text": prompt}}, textSchema, maxTextOutputTokens)
 	if err != nil {
 		return a, err
 	}
-	// Uma descrição sempre "tem conteúdo"; o campo só faz sentido para áudio.
+	// Texto sempre "tem conteúdo"; o campo só faz sentido para áudio.
 	a.HasSpeech = true
 	return a, nil
 }
@@ -71,7 +95,7 @@ func (g *gemini) AnalyzeAudio(ctx context.Context, audio []byte, mime string) (A
 		map[string]any{"inlineData": map[string]any{"mimeType": mime, "data": base64.StdEncoding.EncodeToString(audio)}},
 		map[string]any{"text": audioPrompt},
 	}
-	a, err := g.generate(ctx, parts)
+	a, err := g.generate(ctx, parts, analysisSchema, maxAudioOutputTokens)
 	if err != nil {
 		return a, err
 	}
@@ -84,14 +108,15 @@ func (g *gemini) AnalyzeAudio(ctx context.Context, audio []byte, mime string) (A
 	return a, nil
 }
 
-func (g *gemini) generate(ctx context.Context, parts []any) (Analysis, error) {
+func (g *gemini) generate(ctx context.Context, parts []any, schema map[string]any, maxOutputTokens int) (Analysis, error) {
 	body := map[string]any{
 		"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": systemPrompt}}},
 		"contents":          []any{map[string]any{"role": "user", "parts": parts}},
 		"generationConfig": map[string]any{
 			"temperature":      0.2,
+			"maxOutputTokens":  maxOutputTokens,
 			"responseMimeType": "application/json",
-			"responseSchema":   analysisSchema,
+			"responseSchema":   schema,
 		},
 	}
 	var resp struct {
@@ -112,6 +137,12 @@ func (g *gemini) generate(ctx context.Context, parts []any) (Analysis, error) {
 	}
 	if len(resp.Candidates) == 0 || len(resp.Candidates[0].Content.Parts) == 0 {
 		return Analysis{}, fmt.Errorf("gemini sem resposta (bloqueio: %q)", resp.PromptFeedback.BlockReason)
+	}
+	// Só STOP é resposta completa. MAX_TOKENS (transcrição cortada ou em laço de
+	// repetição) e os demais motivos viram erro: melhor pedir descrição do que
+	// salvar uma transcrição pela metade.
+	if fr := resp.Candidates[0].FinishReason; fr != "" && fr != "STOP" {
+		return Analysis{}, fmt.Errorf("resposta incompleta do gemini (%s)", fr)
 	}
 	var sb strings.Builder
 	for _, p := range resp.Candidates[0].Content.Parts {

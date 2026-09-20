@@ -141,3 +141,52 @@ func TestSchemaRequiresTranscript(t *testing.T) {
 		}
 	}
 }
+
+func TestIncompleteResponseIsAnError(t *testing.T) {
+	// Transcrição cortada no limite de saída: nunca pode virar item salvo.
+	g := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"candidates":[{"finishReason":"MAX_TOKENS","content":{"parts":[{"text":"{\"has_speech\":true,\"transcript\":\"olá tudo bem com vocês hoje"}]}}]}`)
+	})
+	_, err := g.AnalyzeAudio(context.Background(), []byte("x"), "audio/mp3")
+	if err == nil || !strings.Contains(err.Error(), "MAX_TOKENS") {
+		t.Fatalf("esperava erro de resposta incompleta: %v", err)
+	}
+}
+
+func TestOutputIsCapped(t *testing.T) {
+	var body string
+	g := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		io.WriteString(w, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"has_speech\":true,\"transcript\":\"\",\"summary\":\"x\",\"tags\":[]}"}]}}]}`)
+	})
+	g.AnalyzeAudio(context.Background(), []byte("x"), "audio/mp3")
+	if !strings.Contains(body, `"maxOutputTokens":8192`) {
+		t.Errorf("áudio sem teto de saída: %s", body)
+	}
+	g.AnalyzeTranscript(context.Background(), "texto")
+	if !strings.Contains(body, `"maxOutputTokens":2048`) || !strings.Contains(body, "Transcrição do áudio do vídeo") {
+		t.Errorf("transcrição: %s", body)
+	}
+}
+
+// Regressão: o schema de texto não pode exigir "transcript", senão o modelo
+// reescreve a transcrição inteira ao resumir (estourou o teto de saída).
+func TestTextSchemaHasNoTranscript(t *testing.T) {
+	props, _ := textSchema["properties"].(map[string]any)
+	if _, has := props["transcript"]; has {
+		t.Fatal("textSchema não deve ter transcript")
+	}
+	var body string
+	g := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		io.WriteString(w, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"summary\":\"x\",\"tags\":[\"a\"]}"}]}}]}`)
+	})
+	if _, err := g.AnalyzeTranscript(context.Background(), "texto longo"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(body, `"transcript":{"type"`) {
+		t.Errorf("schema de texto enviado com transcript: %s", body)
+	}
+}

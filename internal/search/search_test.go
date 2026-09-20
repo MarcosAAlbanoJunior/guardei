@@ -60,6 +60,9 @@ func (fakeAI) AnalyzeAudio(context.Context, []byte, string) (ai.Analysis, error)
 	return ai.Analysis{}, nil
 }
 func (fakeAI) AnalyzeText(context.Context, string) (ai.Analysis, error) { return ai.Analysis{}, nil }
+func (fakeAI) AnalyzeTranscript(context.Context, string) (ai.Analysis, error) {
+	return ai.Analysis{}, nil
+}
 func (f fakeAI) Embed(_ context.Context, text string, _ ai.EmbedTask) ([]float32, error) {
 	if f.fail {
 		return nil, errors.New("falhou")

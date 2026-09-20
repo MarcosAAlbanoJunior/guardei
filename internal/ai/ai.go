@@ -29,6 +29,8 @@ type AIClient interface {
 	Enabled() bool
 	AnalyzeAudio(ctx context.Context, audio []byte, mime string) (Analysis, error)
 	AnalyzeText(ctx context.Context, text string) (Analysis, error)
+	// AnalyzeTranscript resume e etiqueta uma transcrição já pronta (Summary e Tags).
+	AnalyzeTranscript(ctx context.Context, transcript string) (Analysis, error)
 	Embed(ctx context.Context, text string, task EmbedTask) ([]float32, error)
 }
 
@@ -47,6 +49,9 @@ func (nopAI) AnalyzeAudio(context.Context, []byte, string) (Analysis, error) {
 	return Analysis{}, ErrAIDisabled
 }
 func (nopAI) AnalyzeText(context.Context, string) (Analysis, error) { return Analysis{}, ErrAIDisabled }
+func (nopAI) AnalyzeTranscript(context.Context, string) (Analysis, error) {
+	return Analysis{}, ErrAIDisabled
+}
 func (nopAI) Embed(context.Context, string, EmbedTask) ([]float32, error) {
 	return nil, ErrAIDisabled
 }

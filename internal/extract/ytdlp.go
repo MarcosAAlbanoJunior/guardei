@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,11 +23,17 @@ const (
 	downloadTimeout = 60 * time.Second
 	// maxAudioBytes deixa folga no limite de 20 MB da requisição inline do Gemini.
 	maxAudioBytes = 15 << 20
+
+	// segmentDuration: pedaços de 5 min saem completos; corridas únicas de ~25
+	// min pararam na metade ou entraram em repetição.
+	segmentDuration = 300 * time.Second
+	splitTimeout    = 60 * time.Second
 )
 
 // YtDlp extrai o áudio com yt-dlp (download) e ffmpeg (conversão para mp3 mono 16 kHz, ~32 kbps).
 type YtDlp struct {
 	Path        string
+	FFmpegPath  string
 	MaxDuration time.Duration
 
 	sem chan struct{}
@@ -36,7 +43,7 @@ type YtDlp struct {
 type runner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
 func NewYtDlp(path string, maxDuration time.Duration) *YtDlp {
-	return &YtDlp{Path: path, MaxDuration: maxDuration,
+	return &YtDlp{Path: path, FFmpegPath: "ffmpeg", MaxDuration: maxDuration,
 		// Uma extração por vez: mantém a RAM baixa em VPS de 512 MB.
 		sem: make(chan struct{}, 1), run: execRun}
 }
@@ -99,14 +106,47 @@ func (y *YtDlp) Audio(ctx context.Context, u *url.URL) (AudioFile, error) {
 		return AudioFile{}, fmt.Errorf("yt-dlp: %w: %s", err, lastLine(out))
 	}
 
-	data, err := os.ReadFile(filepath.Join(dir, "audio.mp3"))
+	segments, err := y.segments(ctx, dir, dur)
 	if err != nil {
-		return AudioFile{}, fmt.Errorf("áudio não gerado: %w", err)
+		return AudioFile{}, err
 	}
-	if len(data) > maxAudioBytes {
-		return AudioFile{}, ErrTooLarge
+	return AudioFile{Segments: segments, Mime: "audio/mp3", Duration: dur, Title: title}, nil
+}
+
+// segments lê o mp3 baixado e, se for longo, o fatia em pedaços sem reencodar.
+func (y *YtDlp) segments(ctx context.Context, dir string, dur time.Duration) ([][]byte, error) {
+	src := filepath.Join(dir, "audio.mp3")
+	if info, err := os.Stat(src); err != nil {
+		return nil, fmt.Errorf("áudio não gerado: %w", err)
+	} else if info.Size() > maxAudioBytes {
+		return nil, ErrTooLarge
 	}
-	return AudioFile{Data: data, Mime: "audio/mp3", Duration: dur, Title: title}, nil
+
+	files := []string{src}
+	if dur > segmentDuration+segmentDuration/10 {
+		sctx, cancel := context.WithTimeout(ctx, splitTimeout)
+		defer cancel()
+		out, err := y.run(sctx, y.FFmpegPath, "-loglevel", "error", "-i", src,
+			"-f", "segment", "-segment_time", fmt.Sprint(int(segmentDuration.Seconds())),
+			"-c", "copy", filepath.Join(dir, "seg_%03d.mp3"))
+		if err != nil {
+			return nil, fmt.Errorf("ffmpeg: %w: %s", err, lastLine(out))
+		}
+		if files, err = filepath.Glob(filepath.Join(dir, "seg_*.mp3")); err != nil || len(files) == 0 {
+			return nil, fmt.Errorf("ffmpeg não gerou trechos")
+		}
+		sort.Strings(files)
+	}
+
+	segs := make([][]byte, 0, len(files))
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		segs = append(segs, b)
+	}
+	return segs, nil
 }
 
 func (y *YtDlp) probe(ctx context.Context, rawURL string) (title string, dur time.Duration, err error) {
