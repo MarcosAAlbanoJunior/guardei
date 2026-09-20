@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// Nomes das plataformas reconhecidas (valor da coluna items.platform).
 const (
 	YouTube   = "youtube"
 	TikTok    = "tiktok"
@@ -17,7 +18,7 @@ const (
 	Other     = "other"
 )
 
-// Extract indica quais plataformas têm extração de áudio (flag `extract` da spec).
+// Extract diz quais plataformas têm extração de áudio.
 // TikTok e X são "melhor esforço": o yt-dlp pode falhar sem aviso (IP bloqueado,
 // post protegido) e, nesse caso, o bot cai no pedido de descrição.
 var Extract = map[string]bool{

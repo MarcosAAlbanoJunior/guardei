@@ -20,91 +20,30 @@ const (
 
 var loginWall = regexp.MustCompile(`(?i)(entre ou cadastre-se|faça login|fazer login|log in to|sign in to|sign up|join linkedin|enable javascript|verify you are human|just a moment|access denied|acesso negado)`)
 
+var (
+	// skipTags: o texto dentro delas é interface ou código, não conteúdo.
+	skipTags = map[string]bool{"script": true, "style": true, "noscript": true, "svg": true, "nav": true,
+		"footer": true, "header": true, "aside": true, "form": true, "template": true}
+	textTags = map[string]bool{"p": true, "h1": true, "h2": true, "h3": true, "li": true, "blockquote": true}
+)
+
 // parse extrai metadados e, fora das redes sociais, o texto dos parágrafos.
 func parse(body []byte, base *url.URL, social bool) (Page, error) {
-	meta := map[string]string{}
-	var title string
-	var paras []string
-
-	z := html.NewTokenizer(bytes.NewReader(body))
-	var (
-		inTitle bool
-		skip    int    // dentro de script, style, nav, footer…
-		collect string // tag de texto aberta (p, h1, li…)
-		buf     strings.Builder
-	)
-	skipTags := map[string]bool{"script": true, "style": true, "noscript": true, "svg": true, "nav": true,
-		"footer": true, "header": true, "aside": true, "form": true, "template": true}
-	textTags := map[string]bool{"p": true, "h1": true, "h2": true, "h3": true, "li": true, "blockquote": true}
-
-	for {
-		tt := z.Next()
-		if tt == html.ErrorToken {
-			if z.Err() != io.EOF && len(meta) == 0 && title == "" {
-				return Page{}, z.Err()
-			}
-			break
-		}
-		switch tt {
-		case html.StartTagToken, html.SelfClosingTagToken:
-			name, hasAttr := z.TagName()
-			tag := string(name)
-			attrs := map[string]string{}
-			for hasAttr {
-				var k, v []byte
-				k, v, hasAttr = z.TagAttr()
-				attrs[strings.ToLower(string(k))] = string(v)
-			}
-			switch {
-			case tag == "meta":
-				key := strings.ToLower(firstNonEmpty(attrs["property"], attrs["name"]))
-				if key != "" && attrs["content"] != "" {
-					if _, seen := meta[key]; !seen {
-						meta[key] = attrs["content"]
-					}
-				}
-			case tag == "title" && title == "":
-				inTitle = true
-			case skipTags[tag] && tt == html.StartTagToken:
-				skip++
-			case textTags[tag] && skip == 0 && !social && tt == html.StartTagToken:
-				collect = tag
-				buf.Reset()
-			}
-		case html.EndTagToken:
-			name, _ := z.TagName()
-			tag := string(name)
-			switch {
-			case tag == "title":
-				inTitle = false
-			case skipTags[tag] && skip > 0:
-				skip--
-			case tag == collect && collect != "":
-				if t := clean(buf.String()); utf8.RuneCountInString(t) >= minParagraf {
-					paras = append(paras, t)
-				}
-				collect = ""
-			}
-		case html.TextToken:
-			switch {
-			case inTitle:
-				title += string(z.Text())
-			case collect != "" && skip == 0:
-				buf.Write(z.Text())
-				buf.WriteByte(' ')
-			}
-		}
+	sc := scanner{social: social, meta: map[string]string{}}
+	if err := sc.run(body); err != nil {
+		return Page{}, err
 	}
+	meta := sc.meta
 
 	p := Page{
-		Title:    truncate(clean(firstNonEmpty(meta["og:title"], meta["twitter:title"], title)), maxTitle),
+		Title:    truncate(clean(firstNonEmpty(meta["og:title"], meta["twitter:title"], sc.title)), maxTitle),
 		Author:   clean(firstNonEmpty(meta["author"], meta["article:author"], meta["twitter:creator"])),
 		SiteName: clean(meta["og:site_name"]),
 		ImageURL: resolve(base, firstNonEmpty(meta["og:image"], meta["twitter:image"])),
 	}
 	desc := clean(firstNonEmpty(meta["og:description"], meta["twitter:description"], meta["description"]))
 	text := desc
-	if body := clean(strings.Join(paras, "\n\n")); body != "" && (desc == "" || !strings.Contains(body, desc)) {
+	if body := clean(strings.Join(sc.paras, "\n\n")); body != "" && (desc == "" || !strings.Contains(body, desc)) {
 		text = strings.TrimSpace(desc + "\n\n" + body)
 	}
 	p.Text = truncate(text, maxText)
@@ -117,6 +56,92 @@ func parse(body []byte, base *url.URL, social bool) (Page, error) {
 		return Page{}, ErrNoContent
 	}
 	return p, nil
+}
+
+// scanner percorre o HTML uma vez, coletando metadados, <title> e parágrafos.
+type scanner struct {
+	social bool
+	meta   map[string]string // primeira ocorrência de cada <meta property|name>
+	title  string
+	paras  []string
+
+	inTitle bool
+	skip    int    // profundidade dentro de tags de skipTags
+	collect string // tag de texto aberta (p, h1, li…)
+	buf     strings.Builder
+}
+
+func (sc *scanner) run(body []byte) error {
+	z := html.NewTokenizer(bytes.NewReader(body))
+	for {
+		switch z.Next() {
+		case html.ErrorToken:
+			if z.Err() != io.EOF && len(sc.meta) == 0 && sc.title == "" {
+				return z.Err()
+			}
+			return nil
+		case html.StartTagToken:
+			sc.startTag(z, false)
+		case html.SelfClosingTagToken:
+			sc.startTag(z, true)
+		case html.EndTagToken:
+			sc.endTag(z)
+		case html.TextToken:
+			sc.text(z)
+		}
+	}
+}
+
+func (sc *scanner) startTag(z *html.Tokenizer, selfClosing bool) {
+	name, hasAttr := z.TagName()
+	tag := string(name)
+	attrs := map[string]string{}
+	for hasAttr {
+		var k, v []byte
+		k, v, hasAttr = z.TagAttr()
+		attrs[strings.ToLower(string(k))] = string(v)
+	}
+
+	switch {
+	case tag == "meta":
+		key := strings.ToLower(firstNonEmpty(attrs["property"], attrs["name"]))
+		if _, seen := sc.meta[key]; key != "" && attrs["content"] != "" && !seen {
+			sc.meta[key] = attrs["content"]
+		}
+	case tag == "title" && sc.title == "":
+		sc.inTitle = true
+	case skipTags[tag] && !selfClosing:
+		sc.skip++
+	case textTags[tag] && sc.skip == 0 && !sc.social && !selfClosing:
+		sc.collect = tag
+		sc.buf.Reset()
+	}
+}
+
+func (sc *scanner) endTag(z *html.Tokenizer) {
+	name, _ := z.TagName()
+	tag := string(name)
+	switch {
+	case tag == "title":
+		sc.inTitle = false
+	case skipTags[tag] && sc.skip > 0:
+		sc.skip--
+	case tag == sc.collect && sc.collect != "":
+		if t := clean(sc.buf.String()); utf8.RuneCountInString(t) >= minParagraf {
+			sc.paras = append(sc.paras, t)
+		}
+		sc.collect = ""
+	}
+}
+
+func (sc *scanner) text(z *html.Tokenizer) {
+	switch {
+	case sc.inTitle:
+		sc.title += string(z.Text())
+	case sc.collect != "" && sc.skip == 0:
+		sc.buf.Write(z.Text())
+		sc.buf.WriteByte(' ')
+	}
 }
 
 func firstNonEmpty(vs ...string) string {

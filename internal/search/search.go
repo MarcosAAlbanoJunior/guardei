@@ -32,9 +32,11 @@ type Result struct {
 	Score float64
 }
 
+// Searcher busca nos itens de um usuário: full-text sempre, e híbrida (RRF com
+// a busca vetorial) quando há IA e vetores.
 type Searcher struct {
 	Store *store.Store
-	AI    ai.AIClient
+	AI    ai.Client
 	Index *Index
 }
 

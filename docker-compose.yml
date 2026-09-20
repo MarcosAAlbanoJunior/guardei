@@ -6,7 +6,7 @@ services:
     env_file: .env
     volumes:
       - guardei-data:/data
-    mem_limit: 512m # meta da spec: caber em VPS de 512 MB
+    mem_limit: 512m # o alvo é rodar em uma VPS de 512 MB
 
 volumes:
   guardei-data:

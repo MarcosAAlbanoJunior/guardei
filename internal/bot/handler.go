@@ -27,7 +27,7 @@ const (
 // o fluxo inteiro sem rede. Use-o sempre por ponteiro.
 type Handler struct {
 	Store       *store.Store
-	AI          ai.AIClient
+	AI          ai.Client
 	Searcher    *search.Searcher
 	Extractor   extract.Extractor
 	Pages       page.Reader // nil = leitura de posts desligada

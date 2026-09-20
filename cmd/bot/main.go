@@ -1,9 +1,10 @@
+// Command bot é o Guardei: um bot de Telegram que salva vídeos e posts e os
+// devolve por busca em linguagem natural. Veja o README para a configuração.
 package main
 
 import (
 	"context"
 	"log/slog"
-	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -46,11 +47,12 @@ func run() error {
 	}
 
 	var extractor extract.Extractor = extract.Nop{}
+	extraction := false
 	if err := extract.Available(cfg.YtdlpPath); err != nil {
 		slog.Warn("extração de áudio desligada; o bot pedirá descrição", "motivo", err)
 	} else {
 		yt := extract.NewYtDlp(cfg.YtdlpPath, time.Duration(cfg.MaxVideoSeconds)*time.Second)
-		extractor = yt
+		extractor, extraction = yt, true
 		go yt.UpdateLoop(ctx, 7*24*time.Hour) // yt-dlp quebra quando a plataforma muda
 	}
 
@@ -64,11 +66,6 @@ func run() error {
 		Allowed:     cfg.AllowedUsers,
 		SearchLimit: cfg.SearchLimit,
 	}
-	slog.Info("bot iniciado", "db", cfg.DBPath, "ia", client.Enabled(), "vetores", index.Len(), "extracao", extractor.Supports(mustParse("https://youtu.be/x")))
+	slog.Info("bot iniciado", "db", cfg.DBPath, "ia", client.Enabled(), "vetores", index.Len(), "extracao", extraction)
 	return bot.Run(ctx, cfg.TelegramToken, h)
-}
-
-func mustParse(raw string) *url.URL {
-	u, _ := url.Parse(raw)
-	return u
 }

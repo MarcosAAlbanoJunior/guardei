@@ -18,6 +18,7 @@ func EncodeVector(v []float32) []byte {
 	return b
 }
 
+// DecodeVector é o inverso de EncodeVector.
 func DecodeVector(b []byte) []float32 {
 	v := make([]float32, len(b)/4)
 	for i := range v {
@@ -26,6 +27,7 @@ func DecodeVector(b []byte) []float32 {
 	return v
 }
 
+// VectorRow é o embedding de um item, para carregar o índice em memória.
 type VectorRow struct {
 	ID, UserID int64
 	Vec        []float32
@@ -75,6 +77,7 @@ func (s *Store) WithoutEmbedding(ctx context.Context, userID int64) ([]Item, err
 		`SELECT `+itemCols+` FROM items WHERE user_id = ? AND embedding IS NULL ORDER BY id`, userID)
 }
 
+// CountEmbedded devolve quantos itens do usuário têm embedding.
 func (s *Store) CountEmbedded(ctx context.Context, userID int64) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,

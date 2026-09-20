@@ -14,17 +14,20 @@ import (
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // driver SQLite em Go puro, sem CGO
 
 	"github.com/marcosjunior/guardei/migrations"
 )
 
+// ErrNotFound indica que o item (ou a espera) não existe para aquele usuário.
 var ErrNotFound = errors.New("não encontrado")
 
+// Store guarda itens e o estado pendente dos chats em SQLite.
 type Store struct {
 	db *sql.DB
 }
 
+// Item é um vídeo ou post salvo.
 type Item struct {
 	ID           int64
 	UserID       int64
@@ -40,6 +43,7 @@ type Item struct {
 	CreatedAt    time.Time
 }
 
+// Hit é um resultado da busca full-text.
 type Hit struct {
 	Item  Item
 	Score float64 // bm25: quanto menor (mais negativo), melhor
@@ -67,6 +71,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return s, nil
 }
 
+// Close fecha o banco.
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -163,6 +168,7 @@ func (s *Store) Insert(ctx context.Context, it *Item) (int64, error) {
 	return res.LastInsertId()
 }
 
+// FindByCanonical acha o item do usuário com aquela URL canônica.
 func (s *Store) FindByCanonical(ctx context.Context, userID int64, canonical string) (Item, error) {
 	it, err := scanItem(s.db.QueryRowContext(ctx,
 		`SELECT `+itemCols+` FROM items WHERE user_id = ? AND canonical_url = ?`, userID, canonical))
@@ -172,6 +178,7 @@ func (s *Store) FindByCanonical(ctx context.Context, userID int64, canonical str
 	return it, err
 }
 
+// Get devolve um item do usuário pelo id.
 func (s *Store) Get(ctx context.Context, userID, id int64) (Item, error) {
 	it, err := scanItem(s.db.QueryRowContext(ctx,
 		`SELECT `+itemCols+` FROM items WHERE user_id = ? AND id = ?`, userID, id))
@@ -181,6 +188,7 @@ func (s *Store) Get(ctx context.Context, userID, id int64) (Item, error) {
 	return it, err
 }
 
+// Delete apaga um item do usuário; o índice full-text acompanha por trigger.
 func (s *Store) Delete(ctx context.Context, userID, id int64) error {
 	return s.affect(s.db.ExecContext(ctx, `DELETE FROM items WHERE user_id = ? AND id = ?`, userID, id))
 }
@@ -195,6 +203,7 @@ func (s *Store) affect(res sql.Result, err error) error {
 	return nil
 }
 
+// Recent lista os n itens mais recentes do usuário.
 func (s *Store) Recent(ctx context.Context, userID int64, n int) ([]Item, error) {
 	return s.queryItems(ctx,
 		`SELECT `+itemCols+` FROM items WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`, userID, n)
@@ -218,6 +227,7 @@ func (s *Store) queryItems(ctx context.Context, query string, args ...any) ([]It
 	return out, rows.Err()
 }
 
+// Count devolve quantos itens o usuário tem.
 func (s *Store) Count(ctx context.Context, userID int64) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE user_id = ?`, userID).Scan(&n)

@@ -18,7 +18,9 @@ type AudioFile struct {
 	Title    string
 }
 
+// Extractor baixa o áudio de vídeos de uma plataforma.
 type Extractor interface {
+	// Supports diz se este extrator sabe tratar o link.
 	Supports(u *url.URL) bool
 	// Audio baixa e prepara o áudio. started (pode ser nil) é chamado quando o link
 	// tem vídeo dentro do limite e o download vai começar, para o bot avisar o
@@ -27,12 +29,13 @@ type Extractor interface {
 }
 
 var (
-	// ErrNoDuration: transmissão ao vivo ou vídeo sem duração conhecida.
+	// ErrNoDuration indica transmissão ao vivo ou vídeo sem duração conhecida.
 	ErrNoDuration = errors.New("vídeo sem duração conhecida (ao vivo?)")
-	ErrTooLarge   = errors.New("áudio grande demais")
+	// ErrTooLarge indica áudio acima do limite de tamanho da requisição à IA.
+	ErrTooLarge = errors.New("áudio grande demais")
 )
 
-// TooLongError: o vídeo passa de MAX_VIDEO_SECONDS.
+// TooLongError indica um vídeo mais longo que MAX_VIDEO_SECONDS.
 type TooLongError struct{ Duration, Max time.Duration }
 
 func (e *TooLongError) Error() string {
@@ -42,7 +45,10 @@ func (e *TooLongError) Error() string {
 // Nop é o extrator usado quando yt-dlp ou ffmpeg não estão disponíveis.
 type Nop struct{}
 
+// Supports sempre devolve falso: não há extrator.
 func (Nop) Supports(*url.URL) bool { return false }
+
+// Audio sempre falha: não há extrator.
 func (Nop) Audio(context.Context, *url.URL, func()) (AudioFile, error) {
 	return AudioFile{}, errors.New("extração indisponível")
 }

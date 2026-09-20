@@ -42,6 +42,7 @@ type YtDlp struct {
 
 type runner func(ctx context.Context, name string, args ...string) ([]byte, error)
 
+// NewYtDlp cria o extrator. maxDuration é o teto de duração de um vídeo.
 func NewYtDlp(path string, maxDuration time.Duration) *YtDlp {
 	return &YtDlp{Path: path, FFmpegPath: "ffmpeg", MaxDuration: maxDuration,
 		// Uma extração por vez: mantém a RAM baixa em VPS de 512 MB.
@@ -66,11 +67,13 @@ func Available(ytdlpPath string) error {
 	return nil
 }
 
+// Supports diz se a plataforma do link tem extração de áudio.
 func (y *YtDlp) Supports(u *url.URL) bool {
 	plat, _, err := platform.Canonical(u.String())
 	return err == nil && platform.Extract[plat]
 }
 
+// Audio sonda o link, baixa o áudio, converte e fatia. Ver Extractor.
 func (y *YtDlp) Audio(ctx context.Context, u *url.URL, started func()) (AudioFile, error) {
 	select {
 	case y.sem <- struct{}{}:

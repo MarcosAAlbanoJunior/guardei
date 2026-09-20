@@ -27,6 +27,7 @@ type Neighbor struct {
 	Cosine float64
 }
 
+// NewIndex cria um índice vazio.
 func NewIndex() *Index { return &Index{rows: map[int64]entry{}} }
 
 // Load carrega todos os vetores do banco.
@@ -52,18 +53,21 @@ func newEntry(userID int64, v []float32) entry {
 	return entry{userID: userID, vec: v, norm: math.Sqrt(sum)}
 }
 
+// Set guarda (ou troca) o vetor de um item.
 func (ix *Index) Set(userID, id int64, v []float32) {
 	ix.mu.Lock()
 	ix.rows[id] = newEntry(userID, v)
 	ix.mu.Unlock()
 }
 
+// Remove tira um item do índice.
 func (ix *Index) Remove(id int64) {
 	ix.mu.Lock()
 	delete(ix.rows, id)
 	ix.mu.Unlock()
 }
 
+// Len devolve quantos vetores há no índice.
 func (ix *Index) Len() int {
 	ix.mu.RLock()
 	defer ix.mu.RUnlock()

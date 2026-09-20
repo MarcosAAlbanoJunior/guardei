@@ -26,7 +26,7 @@ type harness struct {
 
 func newHarness(t *testing.T) *harness { return newHarnessAI(t, ai.New("", "", "")) }
 
-func newHarnessAI(t *testing.T, client ai.AIClient) *harness {
+func newHarnessAI(t *testing.T, client ai.Client) *harness {
 	t.Helper()
 	st, err := store.Open(context.Background(), t.TempDir()+"/t.db")
 	if err != nil {
@@ -319,7 +319,7 @@ func (f *fakePages) Read(_ context.Context, u string) (page.Page, error) {
 	return f.pg, f.err
 }
 
-func withPages(t *testing.T, client ai.AIClient, pg *fakePages) *harness {
+func withPages(t *testing.T, client ai.Client, pg *fakePages) *harness {
 	hn := newHarnessAI(t, client)
 	hn.h.Pages = pg
 	return hn

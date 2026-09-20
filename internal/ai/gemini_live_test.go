@@ -9,7 +9,7 @@ import (
 )
 
 // Teste contra a API real: só roda com GEMINI_API_KEY definida.
-func liveClient(t *testing.T) AIClient {
+func liveClient(t *testing.T) Client {
 	t.Helper()
 	key := os.Getenv("GEMINI_API_KEY")
 	if key == "" {

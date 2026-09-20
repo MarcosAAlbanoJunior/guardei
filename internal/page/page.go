@@ -20,14 +20,15 @@ type Page struct {
 }
 
 var (
-	// ErrBlocked: o site recusou (login, bloqueio, 4xx).
+	// ErrBlocked indica que o site recusou o acesso (login, bloqueio, 4xx).
 	ErrBlocked = errors.New("o site bloqueou o acesso ou pede login")
-	// ErrNoContent: a página abriu, mas não há texto aproveitável.
+	// ErrNoContent indica que a página abriu, mas não há texto aproveitável.
 	ErrNoContent = errors.New("a página não tem texto aproveitável")
-	// ErrUnavailable: leitura de páginas desligada.
+	// ErrUnavailable indica que a leitura de páginas está desligada.
 	ErrUnavailable = errors.New("leitura de páginas indisponível")
 )
 
+// Reader lê o conteúdo público de um link.
 type Reader interface {
 	Read(ctx context.Context, rawURL string) (Page, error)
 }

@@ -7,6 +7,7 @@ import (
 	"errors"
 )
 
+// ErrAIDisabled é o erro de toda chamada quando não há GEMINI_API_KEY.
 var ErrAIDisabled = errors.New("IA desligada")
 
 // Analysis é o resultado da análise de um vídeo (áudio) ou de uma descrição.
@@ -27,12 +28,15 @@ type Post struct {
 // EmbedTask diferencia o lado do documento e o da consulta na busca.
 type EmbedTask int
 
+// Tarefas de embedding.
 const (
 	TaskDocument EmbedTask = iota
 	TaskQuery
 )
 
-type AIClient interface {
+// Client é o provedor de IA usado pelo bot. Sem chave, a implementação é uma
+// versão que só devolve ErrAIDisabled e o bot cai no modo manual.
+type Client interface {
 	Enabled() bool
 	AnalyzeAudio(ctx context.Context, audio []byte, mime string) (Analysis, error)
 	AnalyzeText(ctx context.Context, text string) (Analysis, error)
@@ -45,7 +49,7 @@ type AIClient interface {
 }
 
 // New devolve o cliente Gemini quando há chave, senão o nopAI.
-func New(apiKey, model, embeddingModel string) AIClient {
+func New(apiKey, model, embeddingModel string) Client {
 	if apiKey == "" {
 		return nopAI{}
 	}

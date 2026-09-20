@@ -14,7 +14,7 @@ const segmentTimeout = 60 * time.Second
 // para antes do fim ou entra em repetição, então cada pedaço (~5 min) é
 // transcrito à parte e o resumo e as tags saem da transcrição completa.
 // HasSpeech é falso se nenhum pedaço tiver fala.
-func AnalyzeSegments(ctx context.Context, c AIClient, segments [][]byte, mime string) (Analysis, error) {
+func AnalyzeSegments(ctx context.Context, c Client, segments [][]byte, mime string) (Analysis, error) {
 	if len(segments) == 0 {
 		return Analysis{}, fmt.Errorf("nenhum trecho de áudio")
 	}

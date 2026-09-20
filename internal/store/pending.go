@@ -29,6 +29,7 @@ func (s *Store) SetPending(ctx context.Context, p Pending) error {
 	return err
 }
 
+// GetPending devolve a espera do chat, ou ErrNotFound.
 func (s *Store) GetPending(ctx context.Context, chatID int64) (Pending, error) {
 	p := Pending{ChatID: chatID}
 	var itemID sql.NullInt64

@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// Config é a configuração do bot, lida das variáveis de ambiente.
 type Config struct {
 	TelegramToken string
 	AllowedUsers  map[int64]bool
