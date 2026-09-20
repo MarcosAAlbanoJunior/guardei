@@ -13,6 +13,7 @@ const (
 	TikTok    = "tiktok"
 	X         = "x"
 	Instagram = "instagram"
+	LinkedIn  = "linkedin"
 	Other     = "other"
 )
 
@@ -24,8 +25,11 @@ var Extract = map[string]bool{
 	TikTok:    true,
 	X:         true,
 	Instagram: false,
+	LinkedIn:  false,
 	Other:     false,
 }
+
+var instaUserPath = regexp.MustCompile(`^/[^/]+/(p|reel|reels|tv)/([^/]+)$`)
 
 var urlRe = regexp.MustCompile(`https?://[^\s<>"]+`)
 
@@ -71,7 +75,14 @@ func Canonical(raw string) (plat, canonical string, err error) {
 		return TikTok, build(host, path, nil), nil
 	case host == "x.com" || host == "twitter.com":
 		return X, build("x.com", path, nil), nil
+	case host == "linkedin.com" || strings.HasSuffix(host, ".linkedin.com"):
+		// pt., br. etc. abrem o mesmo post; os parâmetros são só rastreio.
+		return LinkedIn, build("linkedin.com", path, nil), nil
 	case host == "instagram.com" || host == "instagr.am":
+		// /usuario/p/<código> redireciona para /p/<código>: é o mesmo post.
+		if m := instaUserPath.FindStringSubmatch(path); m != nil {
+			path = "/" + m[1] + "/" + m[2]
+		}
 		return Instagram, build("instagram.com", path, nil), nil
 	}
 	return Other, build(host, path, stripTracking(u.Query())), nil

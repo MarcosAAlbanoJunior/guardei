@@ -1,8 +1,8 @@
 # Guardei
 
-Bot de Telegram em Go para salvar links de vídeos (Instagram, TikTok, YouTube, X) e achá-los depois por busca em linguagem natural. Transcrição opcional com Gemini. Self-hosted, leve, SQLite.
+Bot de Telegram em Go para salvar vídeos e posts (Instagram, TikTok, YouTube, X, LinkedIn e qualquer página) e achá-los depois por busca em linguagem natural. Transcrição e análise opcionais com Gemini. Self-hosted, leve, SQLite.
 
-Conteúdo salvo em vários apps se perde, porque cada um tem sua lista e uma busca fraca. Aqui há um lugar só, o seu chat com o bot: cada link entra com uma descrição do que o vídeo trata, e você acha depois escrevendo o que lembra ("aquele vídeo do pão de queijo").
+Conteúdo salvo em vários apps se perde, porque cada um tem sua lista e uma busca fraca. Aqui há um lugar só, o seu chat com o bot: cada link entra com uma descrição do que ele trata, e você acha depois escrevendo o que lembra ("aquele vídeo do pão de queijo", "aquele post sobre CSS").
 
 - **Leve:** um binário Go e um arquivo SQLite. Sem Postgres, sem CGO.
 - **IA opcional:** sem `GEMINI_API_KEY` funciona só com descrição manual e busca full-text.
@@ -13,12 +13,12 @@ Conteúdo salvo em vários apps se perde, porque cada um tem sua lista e uma bus
 
 | Você envia | O bot faz |
 | --- | --- |
-| Link do YouTube, TikTok ou X, sozinho | Baixa o áudio, transcreve com o Gemini e salva título, resumo e tags. |
-| Link + texto na mesma mensagem | Salva com o seu texto como descrição, sem perguntar nada. |
-| Link do Instagram ou de qualquer outro site | Pede uma descrição e salva. |
+| Link de vídeo do YouTube, TikTok ou X, sozinho | Baixa o áudio, transcreve com o Gemini e salva título, resumo e tags. |
+| Link de post (Instagram, X, LinkedIn) ou de qualquer página, sozinho | Lê o texto público do post e o Gemini gera título, resumo e tags. |
+| Link + texto na mesma mensagem | Salva com o seu texto como descrição, sem ler nada. |
 | Texto sem link | Busca nos itens salvos. |
 
-Se a extração não for possível (sem chave, vídeo longo, sem fala, plataforma bloqueando), o bot diz o motivo e pede a descrição. Um link repetido (mesma URL canônica) avisa que já está salvo e oferece atualizar a descrição.
+Para cada link o bot tenta o caminho automático (áudio, depois texto do post). Se não for possível (sem chave, vídeo longo, sem fala, post privado, site pedindo login ou bloqueando), ele diz o motivo e pede a descrição, que você responde em texto. Um link repetido (mesma URL canônica) avisa que já está salvo e oferece atualizar a descrição.
 
 A busca é sempre full-text (SQLite FTS5, sem diferenciar acentos, com prefixo). Com chave Gemini ela vira híbrida: soma a busca semântica (embeddings) por *reciprocal rank fusion*, e assim "comida mineira" acha um vídeo de pão de queijo.
 
@@ -101,7 +101,9 @@ Os padrões foram escolhidos em setembro de 2026 pelo menor custo estável: o `g
 
 ## Limitações
 
-- **Instagram nunca é extraído:** o bot sempre pede descrição. É uma decisão do projeto. Habilitar no futuro é implementar outro `Extractor` e mudar uma flag em `internal/platform`.
+- **Instagram:** o áudio de reels nunca é baixado. Para posts e reels, o bot só lê a legenda que o Instagram expõe publicamente nas tags de prévia do link, e só quando ela existe. Posts privados, sem legenda ou que o Instagram não entrega caem no pedido de descrição.
+- **Posts e páginas:** o bot lê o texto público sem login. LinkedIn costuma entregar o post inteiro. O **X entrega só os primeiros ~300 caracteres** de posts longos, e o bot avisa (`/editar <id>` completa). Páginas que exigem login ou JavaScript para mostrar o conteúdo não funcionam. Sem `GEMINI_API_KEY` o bot não lê posts, só pede a descrição.
+- **Só texto:** imagens, carrosséis e vídeos sem áudio em posts não são analisados, só a legenda.
 - **TikTok e X são "melhor esforço":** o `yt-dlp` pode falhar sem aviso (IP bloqueado, post protegido, login exigido) e o bot cai na descrição. O X exige login para quase tudo hoje, então espere falhas. Links curtos do TikTok (`vm.tiktok.com`) não são resolvidos, então a detecção de duplicatas não os reconhece.
 - **Vídeos longos:** acima de `MAX_VIDEO_SECONDS` o bot pede descrição. O áudio é fatiado em pedaços de 5 minutos e cada um é transcrito à parte. Enviar 25 minutos de uma vez fez o modelo parar na metade ou entrar em repetição. Acima de uns 60 minutos o áudio passa de 15 MB e é recusado.
 - **Áudio sem fala** (música, ruído) é descartado, e o bot pede descrição.
@@ -110,8 +112,9 @@ Os padrões foram escolhidos em setembro de 2026 pelo menor custo estável: o `g
 
 ## Privacidade e termos de uso
 
-- **O áudio dos vídeos é enviado ao Google (Gemini).** Com `GEMINI_API_KEY` vazio, nada sai da sua máquina além das mensagens do Telegram.
-- Extrair conteúdo de uma plataforma pode violar os termos de uso dela. O projeto é para uso pessoal e a extração é opt-in: sem chave ou sem `yt-dlp`, ela não acontece. A responsabilidade do uso é sua.
+- **O áudio dos vídeos e o texto dos posts lidos são enviados ao Google (Gemini).** Com `GEMINI_API_KEY` vazio, nada sai da sua máquina além das mensagens do Telegram, e o bot não baixa nem lê nada.
+- Ao ler um post, o bot faz uma requisição HTTP ao site a partir do seu servidor, como uma prévia de link. Para o Instagram ele se identifica como o rastreador de prévia do Facebook (`facebookexternalhit`), o único que recebe a legenda; para os demais usa um navegador comum. Nunca conecta em endereços internos da rede.
+- Extrair conteúdo de uma plataforma pode violar os termos de uso dela. O projeto é para uso pessoal e a extração é opt-in: sem chave, ela não acontece. A responsabilidade do uso é sua.
 
 ## Operação
 
@@ -157,6 +160,7 @@ cmd/bot/            ponto de entrada
 internal/bot/       handlers do Telegram e máquina de estados
 internal/platform/  detecção de plataforma e URL canônica
 internal/extract/   yt-dlp + ffmpeg (download, conversão, fatiamento)
+internal/page/      leitura do texto público de posts e páginas (Open Graph e HTML)
 internal/ai/        AIClient, Gemini e a versão sem IA
 internal/store/     SQLite, migrações, FTS5
 internal/search/    FTS, cosseno e RRF

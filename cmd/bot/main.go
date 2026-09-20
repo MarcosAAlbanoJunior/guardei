@@ -13,6 +13,7 @@ import (
 	"github.com/marcosjunior/guardei/internal/bot"
 	"github.com/marcosjunior/guardei/internal/config"
 	"github.com/marcosjunior/guardei/internal/extract"
+	"github.com/marcosjunior/guardei/internal/page"
 	"github.com/marcosjunior/guardei/internal/search"
 	"github.com/marcosjunior/guardei/internal/store"
 )
@@ -58,6 +59,7 @@ func run() error {
 		AI:          client,
 		Searcher:    &search.Searcher{Store: st, AI: client, Index: index},
 		Extractor:   extractor,
+		Pages:       page.NewHTTP(),
 		AIInfo:      cfg.GeminiModel + " + " + cfg.GeminiEmbeddingModel,
 		Allowed:     cfg.AllowedUsers,
 		SearchLimit: cfg.SearchLimit,

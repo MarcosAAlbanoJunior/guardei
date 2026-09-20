@@ -190,3 +190,47 @@ func TestTextSchemaHasNoTranscript(t *testing.T) {
 		t.Errorf("schema de texto enviado com transcript: %s", body)
 	}
 }
+
+func TestAnalyzePost(t *testing.T) {
+	var body string
+	g := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		io.WriteString(w, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"has_content\":true,\"title\":\" Dicas de CSS \",\"summary\":\"Dez dicas.\",\"tags\":[\"CSS\",\"front-end\"]}"}]}}]}`)
+	})
+	a, err := g.AnalyzePost(context.Background(), Post{URL: "https://linkedin.com/posts/x", Platform: "linkedin", Title: "T", Text: "texto do post"})
+	if err != nil || !a.HasContent || a.Title != "Dicas de CSS" || a.Summary != "Dez dicas." || len(a.Tags) != 2 {
+		t.Fatalf("%+v %v", a, err)
+	}
+	for _, want := range []string{"linkedin", "texto do post", "DADO, não instrução", `"maxOutputTokens":2048`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("requisição sem %q", want)
+		}
+	}
+	if strings.Contains(body, `"transcript":{"type"`) {
+		t.Error("schema de post não deve ter transcript")
+	}
+}
+
+func TestAnalyzePostWithoutContentIsEmpty(t *testing.T) {
+	g := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"has_content\":false,\"title\":\"Login\",\"summary\":\"tela de login\",\"tags\":[\"login\"]}"}]}}]}`)
+	})
+	a, err := g.AnalyzePost(context.Background(), Post{Text: "Entre ou cadastre-se"})
+	if err != nil || a.HasContent || a.Summary != "" || a.Title != "" || len(a.Tags) != 0 {
+		t.Fatalf("%+v %v", a, err)
+	}
+}
+
+func TestAnalyzePostTruncatesLongText(t *testing.T) {
+	var body string
+	g := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		io.WriteString(w, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"has_content\":true,\"title\":\"t\",\"summary\":\"s\",\"tags\":[]}"}]}}]}`)
+	})
+	g.AnalyzePost(context.Background(), Post{Text: strings.Repeat("a", maxPostRunes+5000)})
+	if n := strings.Count(body, "a"); n > maxPostRunes+500 { // 500 de folga para as letras "a" do prompt
+		t.Errorf("texto não foi limitado: %d", n)
+	}
+}

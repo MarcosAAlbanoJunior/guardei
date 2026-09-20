@@ -32,10 +32,10 @@ type Item struct {
 	Platform     string
 	Title        string
 	UserNote     string
-	Transcript   string
+	Transcript   string // texto extraído do conteúdo: transcrição do áudio ou texto do post
 	Summary      string
 	Tags         []string
-	Source       string // "transcript" | "manual"
+	Source       string // "transcript" | "page" | "manual"
 	CreatedAt    time.Time
 }
 

@@ -25,6 +25,7 @@ func (s *scripted) AnalyzeAudio(context.Context, []byte, string) (Analysis, erro
 	return s.audio[s.calls-1], nil
 }
 func (s *scripted) AnalyzeText(context.Context, string) (Analysis, error) { return Analysis{}, nil }
+func (s *scripted) AnalyzePost(context.Context, Post) (Analysis, error)   { return Analysis{}, nil }
 func (s *scripted) AnalyzeTranscript(_ context.Context, t string) (Analysis, error) {
 	s.gotTranscr = t
 	if s.transcrFail {

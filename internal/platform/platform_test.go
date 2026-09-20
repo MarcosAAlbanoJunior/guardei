@@ -8,8 +8,10 @@ func TestCanonical(t *testing.T) {
 		{"https://www.youtube.com/watch?v=abc123&utm_source=x&t=10", YouTube, "https://youtube.com/watch?v=abc123"},
 		{"https://m.youtube.com/shorts/abc123", YouTube, "https://youtube.com/watch?v=abc123"},
 		{"https://twitter.com/user/status/1?s=20", X, "https://x.com/user/status/1"},
+		{"https://www.instagram.com/fulano/p/AbC/", Instagram, "https://instagram.com/p/AbC"},
 		{"https://www.instagram.com/reel/AbC/?igshid=zz", Instagram, "https://instagram.com/reel/AbC"},
 		{"https://www.tiktok.com/@u/video/1?is_from_webapp=1", TikTok, "https://tiktok.com/@u/video/1"},
+		{"https://pt.linkedin.com/posts/fulano_titulo-activity-123-AbC?utm_source=share&rcm=x", LinkedIn, "https://linkedin.com/posts/fulano_titulo-activity-123-AbC"},
 		{"https://example.com/a/?utm_medium=x&id=3", Other, "https://example.com/a?id=3"},
 	}
 	for _, c := range cases {

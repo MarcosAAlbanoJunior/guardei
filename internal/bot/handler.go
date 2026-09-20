@@ -13,6 +13,7 @@ import (
 
 	"github.com/marcosjunior/guardei/internal/ai"
 	"github.com/marcosjunior/guardei/internal/extract"
+	"github.com/marcosjunior/guardei/internal/page"
 	"github.com/marcosjunior/guardei/internal/platform"
 	"github.com/marcosjunior/guardei/internal/search"
 	"github.com/marcosjunior/guardei/internal/store"
@@ -31,7 +32,8 @@ type Handler struct {
 	AI          ai.AIClient
 	Searcher    *search.Searcher
 	Extractor   extract.Extractor
-	AIInfo      string // texto do /status, ex.: nomes dos modelos
+	Pages       page.Reader // nil = leitura de posts desligada
+	AIInfo      string      // texto do /status, ex.: nomes dos modelos
 	Allowed     map[int64]bool
 	SearchLimit int
 	Reply       func(ctx context.Context, chatID int64, text string)
@@ -294,26 +296,49 @@ func (h *Handler) link(ctx context.Context, userID, chatID int64, raw, note stri
 	if note != "" {
 		return h.save(ctx, userID, chatID, raw, canonical, plat, note)
 	}
-	reason, err := h.transcribe(ctx, userID, chatID, raw, canonical, plat)
+	reason, err := h.auto(ctx, userID, chatID, raw, canonical, plat)
 	if err != nil || reason == "" {
-		return err // erro, ou salvo com a transcrição
+		return err // erro, ou salvo automaticamente
 	}
 	if err := h.Store.SetPending(ctx, store.Pending{ChatID: chatID, URL: raw, Reason: reason}); err != nil {
 		return err
 	}
-	h.Reply(ctx, chatID, fmt.Sprintf("Não consegui transcrever esse vídeo: %s.\nMe diga do que ele trata e eu guardo (ou /cancelar).", reason))
+	h.Reply(ctx, chatID, fmt.Sprintf("Não consegui analisar esse link: %s.\nMe diga do que ele trata e eu guardo (ou /cancelar).", reason))
 	return nil
 }
 
-// transcribe tenta salvar o vídeo pela transcrição do áudio. Devolve "" quando
-// salvou, ou o motivo de cair no modo manual (que vira a pergunta ao usuário).
-func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, canonical, plat string) (string, error) {
-	u, err := url.Parse(raw)
-	if err != nil {
+// outcome é o resultado de uma tentativa automática. reason vazio = salvou.
+type outcome struct {
+	reason   string
+	readPage bool // vale tentar ler a página como alternativa
+}
+
+// auto salva o link sem ajuda do usuário: primeiro pela transcrição do áudio
+// (vídeos) e, se não der, lendo o texto do post. Devolve "" quando salvou, ou o
+// motivo de precisar pedir a descrição.
+func (h *Handler) auto(ctx context.Context, userID, chatID int64, raw, canonical, plat string) (string, error) {
+	o, err := h.transcribe(ctx, userID, chatID, raw, canonical, plat)
+	if err != nil || o.reason == "" || !o.readPage {
+		return o.reason, err
+	}
+	reason, err := h.readPost(ctx, userID, chatID, raw, canonical, plat)
+	if err != nil || reason == "" {
 		return "", err
 	}
+	if platform.Extract[plat] { // era um vídeo: conta as duas falhas
+		reason = o.reason + "; " + reason
+	}
+	return reason, nil
+}
+
+// transcribe tenta salvar o vídeo pela transcrição do áudio.
+func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, canonical, plat string) (outcome, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return outcome{}, err
+	}
 	if reason := h.manualReason(plat, u); reason != "" {
-		return reason, nil
+		return outcome{reason: reason, readPage: h.AI.Enabled()}, nil
 	}
 	h.Reply(ctx, chatID, "⏳ Baixando o áudio e transcrevendo…")
 
@@ -323,22 +348,23 @@ func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, can
 		var tooLong *extract.TooLongError
 		switch {
 		case errors.As(err, &tooLong):
-			return fmt.Sprintf("o vídeo é longo demais (%s; o máximo é %s)", fmtDuration(tooLong.Duration), fmtDuration(tooLong.Max)), nil
+			return outcome{reason: fmt.Sprintf("o vídeo é longo demais (%s; o máximo é %s)", fmtDuration(tooLong.Duration), fmtDuration(tooLong.Max))}, nil
 		case errors.Is(err, extract.ErrNoDuration):
-			return "não consegui saber a duração (transmissão ao vivo?)", nil
+			return outcome{reason: "não consegui saber a duração (transmissão ao vivo?)"}, nil
 		case errors.Is(err, extract.ErrTooLarge):
-			return "o áudio ficou grande demais", nil
+			return outcome{reason: "o áudio ficou grande demais"}, nil
 		}
-		return "não consegui baixar o áudio", nil
+		// Sem vídeo para baixar (ex.: post de texto no X) ou bloqueio: o texto do post ainda pode servir.
+		return outcome{reason: "não consegui baixar o áudio", readPage: true}, nil
 	}
 
 	a, err := ai.AnalyzeSegments(ctx, h.AI, af.Segments, af.Mime)
 	if err != nil {
 		slog.Warn("transcrição por IA falhou", "url", raw, "err", err)
-		return "a IA não conseguiu transcrever", nil
+		return outcome{reason: "a IA não conseguiu transcrever"}, nil
 	}
 	if !a.HasSpeech {
-		return "o vídeo não tem fala (só música ou ruído)", nil
+		return outcome{reason: "o vídeo não tem fala (só música ou ruído)"}, nil
 	}
 
 	it := store.Item{
@@ -347,7 +373,7 @@ func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, can
 	}
 	id, err := h.Store.Insert(ctx, &it)
 	if err != nil {
-		return "", err
+		return outcome{}, err
 	}
 	h.embed(ctx, userID, id, embedText(it))
 
@@ -360,7 +386,7 @@ func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, can
 		msg += "\nTags: " + strings.Join(it.Tags, ", ")
 	}
 	h.Reply(ctx, chatID, msg)
-	return "", nil
+	return outcome{}, nil
 }
 
 func fmtDuration(d time.Duration) string {
