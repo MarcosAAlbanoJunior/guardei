@@ -2,47 +2,116 @@ package bot
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
 	"github.com/MarcosAAlbanoJunior/guardei/internal/extract"
 	"github.com/MarcosAAlbanoJunior/guardei/internal/page"
 	"github.com/MarcosAAlbanoJunior/guardei/internal/search"
 	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 type harness struct {
-	t    *testing.T
-	h    *Handler
-	mu   sync.Mutex
-	last string
-	all  []string // todas as respostas, em ordem
+	t      *testing.T
+	h      *Handler
+	dbPath string
+	mu     sync.Mutex
+	last   string
+	all    []string // todas as respostas, em ordem
+
+	buttons [][]Button // botões da última mensagem enviada (nil se não teve)
+	cleared []int      // mensagens cujos botões foram removidos
+	msgSeq  int        // id da próxima "mensagem" simulada
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessAI(t, ai.New("", "", "")) }
 
 func newHarnessAI(t *testing.T, client ai.Client) *harness {
 	t.Helper()
-	st, err := store.Open(context.Background(), t.TempDir()+"/t.db")
+	dbPath := t.TempDir() + "/t.db"
+	st, err := store.Open(context.Background(), dbPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { st.Close() })
-	hn := &harness{t: t}
+	hn := &harness{t: t, dbPath: dbPath}
 	hn.h = &Handler{Store: st, AI: client, AIInfo: "fake", Extractor: extract.Nop{},
 		Searcher: &search.Searcher{Store: st, AI: client, Index: search.NewIndex()},
 		Allowed:  map[int64]bool{1: true}, SearchLimit: 5,
 		Reply: func(_ context.Context, _ int64, text string) {
 			hn.mu.Lock()
 			defer hn.mu.Unlock()
-			hn.last = text
+			hn.last, hn.buttons = text, nil
 			hn.all = append(hn.all, text)
+		},
+		Keyboard: func(_ context.Context, _ int64, text string, rows [][]Button) {
+			hn.mu.Lock()
+			defer hn.mu.Unlock()
+			hn.last, hn.buttons = text, rows
+			hn.all = append(hn.all, text)
+		},
+		ClearKeyboard: func(_ context.Context, _ int64, messageID int) {
+			hn.mu.Lock()
+			defer hn.mu.Unlock()
+			hn.cleared = append(hn.cleared, messageID)
 		}}
 	return hn
+}
+
+// tap simula o toque no botão com esse Data, numa mensagem nova (id crescente).
+func (hn *harness) tap(data string) string { return hn.tapOn(hn.nextMsg(), data) }
+
+func (hn *harness) nextMsg() int { hn.msgSeq++; return hn.msgSeq }
+
+func (hn *harness) tapOn(messageID int, data string) string {
+	hn.last = ""
+	hn.h.HandleCallback(context.Background(), 1, 1, messageID, data)
+	return hn.last
+}
+
+// button devolve o Data do botão com esse rótulo (prefixo), ou falha o teste.
+func (hn *harness) button(label string) string {
+	hn.t.Helper()
+	for _, row := range hn.buttons {
+		for _, b := range row {
+			if strings.HasPrefix(b.Label, label) {
+				return b.Data
+			}
+		}
+	}
+	hn.t.Fatalf("botão %q não encontrado em %+v", label, hn.buttons)
+	return ""
+}
+
+func (hn *harness) hasButton(label string) bool {
+	for _, row := range hn.buttons {
+		for _, b := range row {
+			if strings.HasPrefix(b.Label, label) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// newest devolve os n itens mais novos do usuário 1.
+func (hn *harness) newest(n int) []store.Item {
+	hn.t.Helper()
+	ids, err := hn.h.Store.IDsByDate(context.Background(), 1, store.Filter{}, n)
+	if err != nil {
+		hn.t.Fatal(err)
+	}
+	items, _ := hn.h.Store.GetMany(context.Background(), 1, ids)
+	return items
 }
 
 func (hn *harness) say(text string) string {
@@ -60,8 +129,9 @@ func (hn *harness) expect(text, contains string) {
 
 // fakeAI: resumo = "Resumo: "+texto; embeddings em 2 dimensões (comida, esporte).
 type fakeAI struct {
-	down  bool
-	audio ai.Analysis // resposta de AnalyzeAudio
+	down   bool
+	audio  ai.Analysis // resposta de AnalyzeAudio
+	embeds *int        // se não nil, conta as chamadas de Embed
 }
 
 func (f fakeAI) AnalyzePost(_ context.Context, p ai.Post) (ai.Analysis, error) {
@@ -98,6 +168,9 @@ func (f fakeAI) AnalyzeText(_ context.Context, text string) (ai.Analysis, error)
 }
 
 func (f fakeAI) Embed(_ context.Context, text string, _ ai.EmbedTask) ([]float32, error) {
+	if f.embeds != nil {
+		*f.embeds++
+	}
 	if f.down {
 		return nil, errors.New("fora do ar")
 	}
@@ -171,3 +244,32 @@ func (hn *harness) said(sub string) bool {
 	}
 	return false
 }
+
+// backdate diz que o item foi salvo há age (o Store só grava a data de agora).
+func (hn *harness) backdate(id int64, age time.Duration) {
+	hn.t.Helper()
+	db, err := sql.Open("sqlite", "file:"+hn.dbPath+"?_pragma=busy_timeout(5000)")
+	if err != nil {
+		hn.t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(`UPDATE items SET created_at = ? WHERE id = ?`, time.Now().Add(-age).Unix(), id); err != nil {
+		hn.t.Fatal(err)
+	}
+}
+
+// seed salva n itens "https://<host>/<i> <note> <i>" e devolve seus ids, do primeiro ao último.
+func (hn *harness) seed(host, note string, n int) []int64 {
+	hn.t.Helper()
+	var ids []int64
+	for i := 1; i <= n; i++ {
+		hn.expect(fmt.Sprintf("https://%s/%s%d %s %d", host, strings.ReplaceAll(note, " ", ""), i, note, i), "Salvo")
+		ids = append(ids, hn.newest(1)[0].ID)
+	}
+	return ids
+}
+
+// itemsIn conta os itens listados em uma resposta.
+func itemsIn(text string) int { return strings.Count(text, "\n\n#") }
+
+func itoa(n int64) string { return strconv.FormatInt(n, 10) }

@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/MarcosAAlbanoJunior/guardei/internal/search"
 	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
@@ -19,7 +21,7 @@ func (h *Handler) command(ctx context.Context, userID, chatID int64, text string
 		h.Reply(ctx, chatID, helpText)
 		return nil
 	case "/recentes":
-		return h.recent(ctx, userID, chatID)
+		return h.recent(ctx, userID, chatID, args)
 	case "/editar":
 		return h.edit(ctx, userID, chatID, args)
 	case "/apagar":
@@ -35,17 +37,10 @@ func (h *Handler) command(ctx context.Context, userID, chatID int64, text string
 	return nil
 }
 
-func (h *Handler) recent(ctx context.Context, userID, chatID int64) error {
-	items, err := h.Store.Recent(ctx, userID, recentLimit)
-	if err != nil {
-		return err
-	}
-	if len(items) == 0 {
-		h.Reply(ctx, chatID, "Ainda não há itens salvos. Envie um link para começar.")
-		return nil
-	}
-	h.Reply(ctx, chatID, formatItems("Últimos itens:", items))
-	return nil
+// recent lista do mais novo ao mais antigo. "/recentes receita" só os que casam com "receita".
+func (h *Handler) recent(ctx context.Context, userID, chatID int64, args string) error {
+	q := search.ParseQuery(args, time.Now())
+	return h.startSearch(ctx, userID, chatID, q, searchOpts{pageSize: recentLimit, newest: true})
 }
 
 // edit: "/editar <id> <texto>" troca na hora; "/editar <id>" pede o texto na próxima mensagem.

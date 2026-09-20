@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/MarcosAAlbanoJunior/guardei/migrations"
 )
@@ -37,18 +38,18 @@ func TestInsertSearchUpdateDelete(t *testing.T) {
 	}
 
 	// diacríticos e prefixo
-	hits, err := s.SearchFTS(ctx, 1, `"pao"* OR "quei"*`, 5)
-	if err != nil || len(hits) != 1 || hits[0].Item.ID != id {
+	hits, err := s.SearchFTSIDs(ctx, 1, `"pao"* OR "quei"*`, Filter{}, 5)
+	if err != nil || len(hits) != 1 || hits[0].ID != id {
 		t.Fatalf("busca: %v %v", hits, err)
 	}
 
 	if err := s.UpdateContent(ctx, 1, id, "treino de perna na academia", "", nil); err != nil {
 		t.Fatal(err)
 	}
-	if hits, _ = s.SearchFTS(ctx, 1, `"queijo"*`, 5); len(hits) != 0 {
+	if hits, _ = s.SearchFTSIDs(ctx, 1, `"queijo"*`, Filter{}, 5); len(hits) != 0 {
 		t.Fatalf("índice não atualizou: %v", hits)
 	}
-	if hits, _ = s.SearchFTS(ctx, 1, `"perna"*`, 5); len(hits) != 1 {
+	if hits, _ = s.SearchFTSIDs(ctx, 1, `"perna"*`, Filter{}, 5); len(hits) != 1 {
 		t.Fatalf("índice não atualizou: %v", hits)
 	}
 
@@ -58,7 +59,7 @@ func TestInsertSearchUpdateDelete(t *testing.T) {
 	if err := s.Delete(ctx, 1, id); err != nil {
 		t.Fatal(err)
 	}
-	if hits, _ = s.SearchFTS(ctx, 1, `"perna"*`, 5); len(hits) != 0 {
+	if hits, _ = s.SearchFTSIDs(ctx, 1, `"perna"*`, Filter{}, 5); len(hits) != 0 {
 		t.Fatalf("índice não removeu: %v", hits)
 	}
 }
@@ -153,12 +154,12 @@ func TestGetFindRecentCountAreScopedToUser(t *testing.T) {
 	if n, _ := s.Count(ctx, 1); n != 2 {
 		t.Fatalf("count=%d", n)
 	}
-	recent, _ := s.Recent(ctx, 1, 10)
-	if len(recent) != 2 || recent[0].ID != b { // mais novo primeiro
-		t.Fatalf("%+v", recent)
+	ids, _ := s.IDsByDate(ctx, 1, Filter{}, 10)
+	if len(ids) != 2 || ids[0] != b { // mais novo primeiro
+		t.Fatalf("%v", ids)
 	}
-	if recent, _ = s.Recent(ctx, 1, 1); len(recent) != 1 {
-		t.Fatalf("limite ignorado: %d", len(recent))
+	if ids, _ = s.IDsByDate(ctx, 1, Filter{}, 1); len(ids) != 1 {
+		t.Fatalf("limite ignorado: %d", len(ids))
 	}
 }
 
@@ -227,5 +228,94 @@ func TestOpenTwiceKeepsDataAndMigrationsOnce(t *testing.T) {
 	defer s2.Close()
 	if n, _ := s2.Count(ctx, 1); n != 1 {
 		t.Fatalf("perdeu dados: %d", n)
+	}
+}
+
+func TestInsertFillsIDAndCreatedAt(t *testing.T) {
+	s := newStore(t)
+	it := Item{UserID: 1, URL: "u", CanonicalURL: "c", Platform: "x", Source: "manual"}
+	id, err := s.Insert(context.Background(), &it)
+	if err != nil || it.ID != id || time.Since(it.CreatedAt) > time.Minute || it.CreatedAt.IsZero() {
+		t.Fatalf("%+v %v", it, err)
+	}
+}
+
+// insertAt cria um item com data de criação controlada, direto no banco.
+func insertAt(t *testing.T, s *Store, user int64, key, platform, note string, at time.Time) int64 {
+	t.Helper()
+	it := Item{UserID: user, URL: key, CanonicalURL: key, Platform: platform, UserNote: note, Source: "manual"}
+	id, err := s.Insert(context.Background(), &it)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE items SET created_at = ? WHERE id = ?`, at.Unix(), id); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestFiltersByPeriodAndPlatform(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	now := time.Now()
+	old := insertAt(t, s, 1, "a", "youtube", "receita de bolo antiga", now.Add(-10*24*time.Hour))
+	mid := insertAt(t, s, 1, "b", "tiktok", "receita de pudim", now.Add(-3*24*time.Hour))
+	new := insertAt(t, s, 1, "c", "youtube", "receita de pizza", now.Add(-1*time.Hour))
+	insertAt(t, s, 2, "d", "youtube", "receita de outro usuário", now)
+
+	week := Filter{Since: now.Add(-7 * 24 * time.Hour)}
+	ids, err := s.IDsByDate(ctx, 1, week, 10)
+	if err != nil || len(ids) != 2 || ids[0] != new || ids[1] != mid {
+		t.Fatalf("últimos 7 dias, do mais novo ao mais antigo: %v %v", ids, err)
+	}
+	if ids, _ = s.IDsByDate(ctx, 1, Filter{Platform: "youtube"}, 10); len(ids) != 2 || ids[0] != new || ids[1] != old {
+		t.Fatalf("plataforma: %v", ids)
+	}
+	// Until é exclusivo; período fechado
+	between := Filter{Since: now.Add(-11 * 24 * time.Hour), Until: now.Add(-3 * 24 * time.Hour)}
+	if ids, _ = s.IDsByDate(ctx, 1, between, 10); len(ids) != 1 || ids[0] != old {
+		t.Fatalf("intervalo: %v", ids)
+	}
+
+	// o mesmo filtro vale na busca full-text
+	hits, err := s.SearchFTSIDs(ctx, 1, `"receita"*`, week, 10)
+	if err != nil || len(hits) != 2 {
+		t.Fatalf("fts com filtro: %v %v", hits, err)
+	}
+	if hits, _ = s.SearchFTSIDs(ctx, 1, `"receita"*`, Filter{}, 10); len(hits) != 3 {
+		t.Fatalf("fts sem filtro: %v", hits)
+	}
+
+	set, err := s.FilteredIDs(ctx, 1, week)
+	if err != nil || len(set) != 2 {
+		t.Fatalf("%v %v", set, err)
+	}
+	if _, ok := set[old]; ok {
+		t.Error("item fora do período no conjunto")
+	}
+	if none, _ := s.FilteredIDs(ctx, 1, Filter{}); none != nil {
+		t.Error("filtro vazio deve devolver nil (nada a restringir)")
+	}
+}
+
+func TestGetManyKeepsOrderAndSkipsMissing(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	now := time.Now()
+	a := insertAt(t, s, 1, "a", "x", "a", now.Add(-3*time.Hour))
+	b := insertAt(t, s, 1, "b", "x", "b", now.Add(-2*time.Hour))
+	c := insertAt(t, s, 1, "c", "x", "c", now.Add(-1*time.Hour))
+	other := insertAt(t, s, 2, "d", "x", "d", now)
+
+	items, err := s.GetMany(ctx, 1, []int64{c, 999, a, other, b})
+	if err != nil || len(items) != 3 || items[0].ID != c || items[1].ID != a || items[2].ID != b {
+		t.Fatalf("ordem/ausentes/outro usuário: %+v %v", items, err)
+	}
+	if items, _ := s.GetMany(ctx, 1, nil); items != nil {
+		t.Fatal("sem ids, sem itens")
+	}
+	sorted, err := s.OrderByNewest(ctx, 1, []int64{a, c, b})
+	if err != nil || len(sorted) != 3 || sorted[0] != c || sorted[1] != b || sorted[2] != a {
+		t.Fatalf("%v %v", sorted, err)
 	}
 }

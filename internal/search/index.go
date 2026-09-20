@@ -74,8 +74,9 @@ func (ix *Index) Len() int {
 	return len(ix.rows)
 }
 
-// Nearest devolve até limit itens do usuário com cosseno >= minCosine, do maior para o menor.
-func (ix *Index) Nearest(userID int64, q []float32, limit int, minCosine float64) []Neighbor {
+// Nearest devolve até limit itens do usuário com cosseno >= minCosine, do maior
+// para o menor. Com allow não nulo, só considera os ids desse conjunto.
+func (ix *Index) Nearest(userID int64, q []float32, limit int, minCosine float64, allow map[int64]struct{}) []Neighbor {
 	qe := newEntry(userID, q)
 	if qe.norm == 0 {
 		return nil
@@ -84,6 +85,9 @@ func (ix *Index) Nearest(userID int64, q []float32, limit int, minCosine float64
 	var out []Neighbor
 	for id, e := range ix.rows {
 		if e.userID != userID || e.norm == 0 || len(e.vec) != len(q) {
+			continue
+		}
+		if _, ok := allow[id]; allow != nil && !ok {
 			continue
 		}
 		var dot float64

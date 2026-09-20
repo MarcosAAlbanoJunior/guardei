@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite" // driver SQLite em Go puro, sem CGO
@@ -41,12 +40,6 @@ type Item struct {
 	Tags         []string
 	Source       string // "transcript" | "page" | "manual"
 	CreatedAt    time.Time
-}
-
-// Hit é um resultado da busca full-text.
-type Hit struct {
-	Item  Item
-	Score float64 // bm25: quanto menor (mais negativo), melhor
 }
 
 // Open abre (ou cria) o banco em path e aplica as migrações.
@@ -116,9 +109,6 @@ func (s *Store) migrate(ctx context.Context) error {
 
 const itemCols = `id, user_id, url, canonical_url, platform, title, user_note, transcript, summary, tags, source, created_at`
 
-// itemColsJoined é itemCols qualificado com "items.", para consultas com JOIN.
-var itemColsJoined = "items." + strings.ReplaceAll(itemCols, ", ", ", items.")
-
 type scanner interface{ Scan(...any) error }
 
 func scanItem(r scanner, extra ...any) (Item, error) {
@@ -155,17 +145,23 @@ func encodeTags(tags []string) any {
 	return string(b)
 }
 
-// Insert grava o item e devolve o id. Item duplicado (mesmo usuário e URL canônica) falha.
+// Insert grava o item, devolve o id e preenche it.ID e it.CreatedAt. Item duplicado
+// (mesmo usuário e URL canônica) falha.
 func (s *Store) Insert(ctx context.Context, it *Item) (int64, error) {
+	now := time.Now()
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO items (user_id, url, canonical_url, platform, title, user_note, transcript, summary, tags, source, created_at)
 		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		it.UserID, it.URL, it.CanonicalURL, it.Platform, nullable(it.Title), nullable(it.UserNote),
-		nullable(it.Transcript), nullable(it.Summary), encodeTags(it.Tags), it.Source, time.Now().Unix())
+		nullable(it.Transcript), nullable(it.Summary), encodeTags(it.Tags), it.Source, now.Unix())
 	if err != nil {
 		return 0, err
 	}
-	return res.LastInsertId()
+	id, err := res.LastInsertId()
+	if err == nil {
+		it.ID, it.CreatedAt = id, time.Unix(now.Unix(), 0)
+	}
+	return id, err
 }
 
 // FindByCanonical acha o item do usuário com aquela URL canônica.
@@ -203,12 +199,6 @@ func (s *Store) affect(res sql.Result, err error) error {
 	return nil
 }
 
-// Recent lista os n itens mais recentes do usuário.
-func (s *Store) Recent(ctx context.Context, userID int64, n int) ([]Item, error) {
-	return s.queryItems(ctx,
-		`SELECT `+itemCols+` FROM items WHERE user_id = ? ORDER BY created_at DESC, id DESC LIMIT ?`, userID, n)
-}
-
 // queryItems roda uma consulta que devolve as colunas de itemCols.
 func (s *Store) queryItems(ctx context.Context, query string, args ...any) ([]Item, error) {
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -232,26 +222,4 @@ func (s *Store) Count(ctx context.Context, userID int64) (int, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM items WHERE user_id = ?`, userID).Scan(&n)
 	return n, err
-}
-
-// SearchFTS roda uma consulta MATCH já montada, ordenada por bm25.
-func (s *Store) SearchFTS(ctx context.Context, userID int64, match string, limit int) ([]Hit, error) {
-	rows, err := s.db.QueryContext(ctx,
-		`SELECT `+itemColsJoined+`, bm25(items_fts)
-		   FROM items_fts JOIN items ON items.id = items_fts.rowid
-		  WHERE items_fts MATCH ? AND items.user_id = ?
-		  ORDER BY bm25(items_fts) LIMIT ?`, match, userID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []Hit
-	for rows.Next() {
-		var h Hit
-		if h.Item, err = scanItem(rows, &h.Score); err != nil {
-			return nil, err
-		}
-		out = append(out, h)
-	}
-	return out, rows.Err()
 }

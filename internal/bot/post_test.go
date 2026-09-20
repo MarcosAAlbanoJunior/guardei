@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -16,7 +15,7 @@ func TestInstagramPostReadAndSearchable(t *testing.T) {
 	hn.expect("https://www.instagram.com/p/DUl9Wk2CZoo/?igshid=x", "Salvo (#1, instagram, post)")
 	hn.expect("/recentes", "Título IA")
 	hn.expect("posicionamento", "#1") // achado pelo texto do post (FTS), sem estar no resumo
-	items, _ := hn.h.Store.Recent(context.Background(), 1, 1)
+	items := hn.newest(1)
 	if items[0].Source != "page" || !strings.Contains(items[0].Transcript, "posicionamento de marca") {
 		t.Fatalf("%+v", items[0])
 	}

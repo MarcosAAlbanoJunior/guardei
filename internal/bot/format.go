@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/MarcosAAlbanoJunior/guardei/internal/search"
 	"github.com/MarcosAAlbanoJunior/guardei/internal/store"
 )
 
@@ -17,9 +19,9 @@ const (
 const helpText = `Guardei: salve vídeos e posts e ache depois por busca.
 
 • Envie um link (com uma descrição na mesma mensagem, se quiser) para salvar.
-• Envie qualquer texto sem link para buscar.
+• Envie qualquer texto sem link para buscar. Dá para dizer "hoje", "essa semana", "mês passado" ou "do youtube" na busca.
 
-/recentes — últimos itens
+/recentes [termo] — itens do mais novo ao mais antigo
 /editar <id> [texto] — troca a descrição
 /apagar <id> — remove um item
 /reindexar — gera resumo e embeddings pendentes
@@ -44,13 +46,68 @@ func savedMessage(id int64, plat, kind, title, body string, tags []string) strin
 	return strings.Join(lines, "\n")
 }
 
-func formatItems(title string, items []store.Item) string {
+// pageHeader descreve a página que está sendo mostrada (itens from a to, 1-based).
+func pageHeader(sess *searchSession, from, to int) string {
+	total := len(sess.ranking.IDs)
+	count := fmt.Sprint(total)
+	if total >= search.MaxRanked {
+		count += "+" // a lista é cortada em MaxRanked
+	}
+	byDate := sess.query.Text == "" || sess.newest
+
+	var head string
+	switch {
+	case total == 1 && byDate:
+		head = "1 item:"
+	case total == 1:
+		head = "Achei 1 item:"
+	case from > 1:
+		head = fmt.Sprintf("Resultados %d–%d de %s:", from, to, count)
+	case byDate:
+		head = fmt.Sprintf("%s itens, do mais novo ao mais antigo · mostrando %s:", count, span(from, to))
+	default:
+		head = fmt.Sprintf("Achei %s itens · mostrando %s:", count, span(from, to))
+	}
+	if label := sess.query.Label(); label != "" {
+		head += "\nFiltro: " + label
+	}
+	return head
+}
+
+func span(from, to int) string {
+	if from == to {
+		return fmt.Sprint(from)
+	}
+	return fmt.Sprintf("%d–%d", from, to)
+}
+
+func formatItems(header string, items []store.Item, now time.Time) string {
 	var b strings.Builder
-	b.WriteString(title)
+	b.WriteString(header)
 	for _, it := range items {
-		fmt.Fprintf(&b, "\n\n#%d · %s\n%s\n%s", it.ID, it.Platform, shorten(itemText(it), maxSnippet), it.URL)
+		fmt.Fprintf(&b, "\n\n#%d · %s · %s\n%s\n%s", it.ID, it.Platform, age(it.CreatedAt, now), shorten(itemText(it), maxSnippet), it.URL)
 	}
 	return b.String()
+}
+
+// age diz há quanto tempo o item foi salvo, em dias de calendário: "hoje", "ontem", "há 3 dias"…
+func age(t, now time.Time) string {
+	day := func(x time.Time) time.Time {
+		x = x.In(now.Location())
+		return time.Date(x.Year(), x.Month(), x.Day(), 0, 0, 0, 0, now.Location())
+	}
+	days := int(day(now).Sub(day(t)).Hours()/24 + 0.5)
+	switch {
+	case days <= 0:
+		return "hoje"
+	case days == 1:
+		return "ontem"
+	case days < 14:
+		return fmt.Sprintf("há %d dias", days)
+	case days < 60:
+		return fmt.Sprintf("há %d semanas", days/7)
+	}
+	return fmt.Sprintf("há %d meses", days/30)
 }
 
 func itemText(it store.Item) string {

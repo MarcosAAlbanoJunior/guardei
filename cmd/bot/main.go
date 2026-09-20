@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
+	_ "time/tzdata" // fuso horário embutido: "hoje" e "ontem" seguem o TZ mesmo na imagem sem tzdata
 
 	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
 	"github.com/MarcosAAlbanoJunior/guardei/internal/bot"

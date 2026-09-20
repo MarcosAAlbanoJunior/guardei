@@ -80,7 +80,9 @@ ALLOWED_USER_IDS=123456789
 GEMINI_API_KEY=AIza...
 ```
 
-Para salvar no `nano`: `Ctrl+O`, `Enter`, `Ctrl+X`. Sem chave do Gemini, deixe `GEMINI_API_KEY=` vazio. Depois proteja o arquivo:
+Para salvar no `nano`: `Ctrl+O`, `Enter`, `Ctrl+X`. Sem chave do Gemini, deixe `GEMINI_API_KEY=` vazio.
+
+Opcional: acrescente `TZ=America/Sao_Paulo` (ou o seu fuso) para que "hoje" e "ontem" nas buscas sigam o seu horário. Sem isso, valem as datas em UTC. Depois proteja o arquivo:
 
 ```bash
 chmod 600 .env
@@ -116,6 +118,7 @@ No Telegram, abra o seu bot e:
 2. Envie o link de um vídeo do YouTube em português, de até 10 minutos. Ele responde `⏳ Baixando o áudio e transcrevendo…` e depois `Salvo (#1, youtube, transcrito)`.
 3. Envie o link de um post do LinkedIn ou do X. Ele lê o texto e salva.
 4. Escreva algo que lembre do que salvou, como `dicas de css`, sem link. Ele devolve o item.
+5. Salve uns 8 itens sobre o mesmo assunto e busque por ele: o bot mostra 5 e um botão **Ver mais**.
 
 ### Dia a dia na VPS
 
@@ -164,7 +167,35 @@ Conteúdo salvo em vários apps se perde, porque cada um tem sua lista e uma bus
 
 Para cada link o bot tenta o caminho automático (áudio, depois texto do post). Se não for possível (sem chave, vídeo longo, sem fala, post privado, site pedindo login ou bloqueando), ele diz o motivo e pede a descrição, que você responde em texto. Um link repetido (mesma URL canônica) avisa que já está salvo e oferece atualizar a descrição.
 
-A busca é sempre full-text (SQLite FTS5, sem diferenciar acentos, com prefixo). Com chave Gemini ela vira híbrida: soma a busca semântica (embeddings) por *reciprocal rank fusion*, e assim "comida mineira" acha um vídeo de pão de queijo.
+A busca é sempre full-text (SQLite FTS5, sem diferenciar acentos, com prefixo, e `receitas` acha `receita`). Com chave Gemini ela vira híbrida: soma a busca semântica (embeddings) por *reciprocal rank fusion*, e assim "comida mineira" acha um vídeo de pão de queijo.
+
+### Muitos resultados, períodos e plataformas
+
+O bot mostra os resultados por página (5 por vez, `SEARCH_LIMIT`) e diz quantos existem:
+
+```
+Achei 50 itens · mostrando 1–5:
+
+#12 · youtube · há 3 dias
+Como fazer bolo de cenoura
+https://youtube.com/...
+```
+
+Sob a mensagem aparecem botões: **Ver mais 5 ▶** traz a próxima página, e **Hoje**, **7 dias** e **30 dias** refazem a busca só naquele período (**Todo o período** volta ao normal). A lista fica guardada na memória por 30 minutos, então tocar nos botões é instantâneo e **não repete a busca nem chama a IA de novo**: só lê do banco os 5 itens da página. Depois de 30 minutos, ou de reiniciar o bot, o botão avisa que a busca expirou e basta repetir a busca.
+
+Você também pode escrever o período ou a plataforma na própria busca:
+
+| Escreva | O bot entende |
+| --- | --- |
+| `receitas da semana`, `receitas essa semana` | receitas dos últimos 7 dias |
+| `receitas de hoje`, `receitas de ontem` | receitas de hoje ou de ontem |
+| `semana passada`, `mês passado`, `deste mês` | o período correspondente |
+| `últimos 15 dias`, `últimas 2 semanas` | os últimos N dias |
+| `receitas do youtube`, `css no tiktok`, `só instagram`, `no x` | só aquela plataforma |
+| `o que eu salvei hoje`, `só do youtube` | sem assunto: tudo do filtro, do mais novo ao mais antigo |
+| `receitas do youtube da semana` | os dois filtros juntos |
+
+O filtro aparece na resposta (`Filtro: YouTube · últimos 7 dias`), e **Todo o período** o remove. "Hoje" e "ontem" só viram filtro em construções como `de hoje`, `salvei hoje` ou no começo da busca; em `algo para cozinhar hoje` a palavra fica no assunto.
 
 ## Comandos
 
@@ -172,7 +203,7 @@ A busca é sempre full-text (SQLite FTS5, sem diferenciar acentos, com prefixo).
 | --- | --- |
 | Mensagem com link | Salva o item. |
 | Mensagem sem link | Busca. |
-| `/recentes` | Últimos 10 itens. |
+| `/recentes [termo]` | Itens do mais novo ao mais antigo (10 por página), ou só os que casam com o termo. Aceita período e plataforma: `/recentes youtube hoje`. |
 | `/editar <id> [texto]` | Troca a descrição e reindexa. Sem texto, pede na próxima mensagem. |
 | `/apagar <id>` | Remove o item. |
 | `/cancelar` | Cancela a espera por descrição. |
@@ -193,6 +224,7 @@ Tudo por variáveis de ambiente, no arquivo `.env`. Só as duas primeiras são o
 | `MAX_VIDEO_SECONDS` | `600` | Vídeos mais longos caem no pedido de descrição. |
 | `YTDLP_PATH` | `yt-dlp` | Caminho do binário. |
 | `SEARCH_LIMIT` | `5` | Máximo de resultados por busca. |
+| `TZ` | UTC no Docker | Fuso horário de "hoje" e "ontem" nas buscas, por exemplo `America/Sao_Paulo`. |
 | `DB_PATH` | `./data/app.db` | Arquivo SQLite (no Docker é `/data/app.db`, no volume). |
 
 ### Escolhendo os modelos
@@ -223,6 +255,7 @@ go run ./cmd/bot
 - **Instagram:** o áudio de reels nunca é baixado. Para posts e reels, o bot só lê a legenda que o Instagram expõe publicamente nas tags de prévia do link, e só quando ela existe. Posts privados, sem legenda ou que o Instagram não entrega caem no pedido de descrição.
 - **Posts e páginas:** o bot lê o texto público sem login. LinkedIn costuma entregar o post inteiro. O **X entrega só os primeiros ~300 caracteres** de posts longos, e o bot avisa (`/editar <id>` completa). Páginas que exigem login ou JavaScript para mostrar o conteúdo não funcionam. Sem `GEMINI_API_KEY` o bot não lê posts, só pede a descrição.
 - **Só texto:** imagens, carrosséis e vídeos sem áudio em posts não são analisados, só a legenda.
+- **Buscas:** cada busca lista no máximo 100 resultados (aparece `100+`). Buscas genéricas trazem muitos itens de relevância parecida, e a ordem entre eles é quase arbitrária: use os botões de período, os filtros escritos ou um termo mais específico. O corte de relevância da busca por sentido foi calibrado com poucos dados, e pode pedir ajuste na sua coleção.
 - **TikTok e X são "melhor esforço":** o `yt-dlp` pode falhar sem aviso (IP bloqueado, post protegido, login exigido) e o bot cai na descrição. O X exige login para quase tudo hoje, então espere falhas. Links curtos do TikTok (`vm.tiktok.com`) não são resolvidos, então a detecção de duplicatas não os reconhece.
 - **Vídeos longos:** acima de `MAX_VIDEO_SECONDS` o bot pede descrição. O áudio é fatiado em pedaços de 5 minutos e cada um é transcrito à parte. Enviar 25 minutos de uma vez fez o modelo parar na metade ou entrar em repetição. Acima de uns 60 minutos o áudio passa de 15 MB e é recusado.
 - **Áudio sem fala** (música, ruído) é descartado, e o bot pede descrição.
@@ -262,6 +295,8 @@ Medidos com o container limitado a 512 MB:
 | Pico do container, contando cache de arquivos | 183 MiB, sem estourar o limite |
 | Construir a imagem | precisa de ~1 GB de RAM; com 512 MB só com swap (45 s no meu teste) |
 
+Uma busca leva cerca de 0,3 s, quase toda na chamada ao Gemini para entender o texto; a comparação com milhares de itens leva alguns milissegundos (7 ms com 10 mil itens, 41 ms com 50 mil, medidos). "Ver mais" e os botões de período respondem em 1 ms.
+
 Só há uma extração de áudio por vez, e `yt-dlp` e `ffmpeg` rodam em sequência, por isso o pico não soma os dois. O uso normal é de poucos MB, mas uma extração passa dos 100 MB por alguns segundos. **Rodar** cabe em 512 MB; **construir** a imagem é que pede mais memória.
 
 ## Desenvolvimento
@@ -293,7 +328,7 @@ internal/extract/   yt-dlp + ffmpeg (download, conversão, fatiamento)
 internal/page/      leitura do texto público de posts e páginas (Open Graph e HTML)
 internal/ai/        interface Client, Gemini e a versão sem IA
 internal/store/     SQLite, migrações, FTS5
-internal/search/    FTS, cosseno e RRF
+internal/search/    FTS, cosseno, RRF e a interpretação de períodos e plataformas
 migrations/         SQL aplicado na inicialização
 ```
 

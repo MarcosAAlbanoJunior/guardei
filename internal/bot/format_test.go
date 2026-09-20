@@ -3,6 +3,7 @@ package bot
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestShorten(t *testing.T) {
@@ -40,5 +41,44 @@ func TestParseID(t *testing.T) {
 	}
 	if _, err := parseID("abc"); err == nil {
 		t.Error("esperava erro")
+	}
+}
+
+func TestAge(t *testing.T) {
+	now := time.Date(2026, 9, 20, 10, 0, 0, 0, time.UTC)
+	for _, c := range []struct {
+		t    time.Time
+		want string
+	}{
+		{now, "hoje"},
+		{now.Add(-9 * time.Hour), "hoje"},   // 01:00 do mesmo dia
+		{now.Add(-11 * time.Hour), "ontem"}, // 23:00 de ontem: dia de calendário, não 24 h
+		{now.AddDate(0, 0, -1), "ontem"},
+		{now.AddDate(0, 0, -5), "há 5 dias"},
+		{now.AddDate(0, 0, -13), "há 13 dias"},
+		{now.AddDate(0, 0, -14), "há 2 semanas"},
+		{now.AddDate(0, 0, -45), "há 6 semanas"},
+		{now.AddDate(0, 0, -60), "há 2 meses"},
+		{now.AddDate(0, -8, 0), "há 8 meses"},
+		{now.Add(time.Hour), "hoje"}, // relógio adiantado: nunca "daqui a"
+	} {
+		if got := age(c.t, now); got != c.want {
+			t.Errorf("%v: %q (queria %q)", c.t, got, c.want)
+		}
+	}
+}
+
+func TestToMarkup(t *testing.T) {
+	m := toMarkup([][]Button{{{Label: "Ver mais 5 ▶", Data: "m:3"}}, {{Label: "Hoje", Data: "p:3:1"}, {Label: "7 dias", Data: "p:3:7"}}})
+	if len(m.InlineKeyboard) != 2 || len(m.InlineKeyboard[1]) != 2 ||
+		m.InlineKeyboard[0][0].Text != "Ver mais 5 ▶" || m.InlineKeyboard[1][1].CallbackData != "p:3:7" {
+		t.Fatalf("%+v", m)
+	}
+	for _, row := range m.InlineKeyboard {
+		for _, b := range row {
+			if len(b.CallbackData) > 64 { // limite do Telegram
+				t.Errorf("callback_data acima de 64 bytes: %q", b.CallbackData)
+			}
+		}
 	}
 }

@@ -37,8 +37,13 @@ type Handler struct {
 
 	// Reply envia uma mensagem ao chat. Run o define ao conectar no Telegram.
 	Reply func(ctx context.Context, chatID int64, text string)
+	// Keyboard envia uma mensagem com botões sob ela. Se nil, os botões são omitidos.
+	Keyboard func(ctx context.Context, chatID int64, text string, rows [][]Button)
+	// ClearKeyboard tira os botões de uma mensagem já enviada.
+	ClearKeyboard func(ctx context.Context, chatID int64, messageID int)
 
-	chats sync.Map // chatID -> *sync.Mutex
+	chats    sync.Map // chatID -> *sync.Mutex
+	sessions sessionStore
 }
 
 // Handle trata uma mensagem de texto de um usuário.
@@ -58,9 +63,14 @@ func (h *Handler) Handle(ctx context.Context, userID, chatID int64, text string)
 	defer h.lockChat(chatID)()
 
 	if err := h.dispatch(ctx, userID, chatID, text); err != nil {
-		slog.Error("erro ao tratar mensagem", "err", err)
-		h.Reply(ctx, chatID, "Algo deu errado do meu lado. Tente de novo em instantes.")
+		h.fail(ctx, chatID, err)
 	}
+}
+
+// fail registra o erro e avisa o usuário sem expor detalhes.
+func (h *Handler) fail(ctx context.Context, chatID int64, err error) {
+	slog.Error("erro ao tratar mensagem", "err", err)
+	h.Reply(ctx, chatID, "Algo deu errado do meu lado. Tente de novo em instantes.")
 }
 
 func (h *Handler) lockChat(chatID int64) (unlock func()) {

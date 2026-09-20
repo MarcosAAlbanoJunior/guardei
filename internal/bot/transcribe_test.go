@@ -1,7 +1,6 @@
 package bot
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -78,7 +77,7 @@ func TestLongVideoIsTranscribedInSegments(t *testing.T) {
 	hn := newHarnessAI(t, fakeAI{audio: speech()})
 	hn.h.Extractor = ex
 	hn.expect("https://youtu.be/abc", "Resumo geral da transcrição")
-	items, _ := hn.h.Store.Recent(context.Background(), 1, 1)
+	items := hn.newest(1)
 	// 5 trechos iguais concatenados: a transcrição guardada é a completa.
 	if got := strings.Count(items[0].Transcript, "hoje vamos fazer pão de queijo"); got != 5 || items[0].Source != "transcript" {
 		t.Fatalf("transcrição com %d trechos: %q", got, items[0].Transcript)
