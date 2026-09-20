@@ -20,7 +20,10 @@ type AudioFile struct {
 
 type Extractor interface {
 	Supports(u *url.URL) bool
-	Audio(ctx context.Context, u *url.URL) (AudioFile, error)
+	// Audio baixa e prepara o áudio. started (pode ser nil) é chamado quando o link
+	// tem vídeo dentro do limite e o download vai começar, para o bot avisar o
+	// usuário só então: um post de texto no X nunca chega aqui.
+	Audio(ctx context.Context, u *url.URL, started func()) (AudioFile, error)
 }
 
 var (
@@ -40,6 +43,6 @@ func (e *TooLongError) Error() string {
 type Nop struct{}
 
 func (Nop) Supports(*url.URL) bool { return false }
-func (Nop) Audio(context.Context, *url.URL) (AudioFile, error) {
+func (Nop) Audio(context.Context, *url.URL, func()) (AudioFile, error) {
 	return AudioFile{}, errors.New("extração indisponível")
 }

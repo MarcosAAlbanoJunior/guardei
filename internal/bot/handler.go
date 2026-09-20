@@ -340,9 +340,11 @@ func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, can
 	if reason := h.manualReason(plat, u); reason != "" {
 		return outcome{reason: reason, readPage: h.AI.Enabled()}, nil
 	}
-	h.Reply(ctx, chatID, "⏳ Baixando o áudio e transcrevendo…")
-
-	af, err := h.Extractor.Audio(ctx, u)
+	// O aviso sai só quando o extrator confirma que há vídeo para baixar: um post
+	// de texto no X passa por aqui e não deve ver "transcrevendo…".
+	af, err := h.Extractor.Audio(ctx, u, func() {
+		h.Reply(ctx, chatID, "⏳ Baixando o áudio e transcrevendo…")
+	})
 	if err != nil {
 		slog.Warn("extração de áudio falhou", "url", raw, "err", err)
 		var tooLong *extract.TooLongError

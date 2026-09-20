@@ -75,10 +75,17 @@ func TestLivePosts(t *testing.T) {
 	defer st.Close()
 	client := ai.New(key, "gemini-2.5-flash-lite", "gemini-embedding-2")
 	var last string
-	h := &Handler{Store: st, AI: client, Extractor: extract.Nop{}, Pages: page.NewHTTP(),
+	var extractor extract.Extractor = extract.Nop{}
+	if extract.Available("yt-dlp") == nil {
+		extractor = extract.NewYtDlp("yt-dlp", 600*time.Second)
+	}
+	h := &Handler{Store: st, AI: client, Extractor: extractor, Pages: page.NewHTTP(),
 		Searcher: &search.Searcher{Store: st, AI: client, Index: search.NewIndex()},
 		Allowed:  map[int64]bool{1: true}, SearchLimit: 5,
-		Reply: func(_ context.Context, _ int64, text string) { last = text }}
+		Reply: func(_ context.Context, _ int64, text string) {
+			last = text
+			t.Logf("  >> %s", strings.SplitN(text, "\n", 2)[0])
+		}}
 
 	for _, u := range strings.Split(urls, ",") {
 		u = strings.TrimSpace(u)

@@ -71,7 +71,7 @@ func (y *YtDlp) Supports(u *url.URL) bool {
 	return err == nil && platform.Extract[plat]
 }
 
-func (y *YtDlp) Audio(ctx context.Context, u *url.URL) (AudioFile, error) {
+func (y *YtDlp) Audio(ctx context.Context, u *url.URL, started func()) (AudioFile, error) {
 	select {
 	case y.sem <- struct{}{}:
 		defer func() { <-y.sem }()
@@ -85,6 +85,10 @@ func (y *YtDlp) Audio(ctx context.Context, u *url.URL) (AudioFile, error) {
 	}
 	if dur > y.MaxDuration {
 		return AudioFile{}, &TooLongError{Duration: dur, Max: y.MaxDuration}
+	}
+
+	if started != nil {
+		started()
 	}
 
 	dir, err := os.MkdirTemp("", "guardei-*")

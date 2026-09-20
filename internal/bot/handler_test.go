@@ -19,6 +19,7 @@ type harness struct {
 	t    *testing.T
 	h    *Handler
 	last string
+	all  []string // todas as respostas, em ordem
 }
 
 func newHarness(t *testing.T) *harness { return newHarnessAI(t, ai.New("", "", "")) }
@@ -34,7 +35,7 @@ func newHarnessAI(t *testing.T, client ai.AIClient) *harness {
 	hn.h = &Handler{Store: st, AI: client, AIInfo: "fake", Extractor: extract.Nop{},
 		Searcher: &search.Searcher{Store: st, AI: client, Index: search.NewIndex()},
 		Allowed:  map[int64]bool{1: true}, SearchLimit: 5,
-		Reply: func(_ context.Context, _ int64, text string) { hn.last = text }}
+		Reply: func(_ context.Context, _ int64, text string) { hn.last = text; hn.all = append(hn.all, text) }}
 	return hn
 }
 
@@ -193,16 +194,25 @@ func TestReindexWithoutAI(t *testing.T) {
 	hn.expect("/status", "desligada")
 }
 
-// fakeExtractor: só YouTube; devolve o áudio ou o erro configurado.
+// fakeExtractor: YouTube e X; devolve o áudio ou o erro configurado.
 type fakeExtractor struct {
-	err      error
-	calls    int
-	segments int // 0 = um só
+	err          error
+	calls        int
+	segments     int  // 0 = um só
+	startedFirst bool // erro só depois de começar o download (o vídeo existe, mas falhou)
 }
 
-func (*fakeExtractor) Supports(u *url.URL) bool { return strings.Contains(u.Host, "youtu") }
-func (f *fakeExtractor) Audio(context.Context, *url.URL) (extract.AudioFile, error) {
+func (*fakeExtractor) Supports(u *url.URL) bool {
+	return strings.Contains(u.Host, "youtu") || u.Host == "x.com"
+}
+func (f *fakeExtractor) Audio(_ context.Context, _ *url.URL, started func()) (extract.AudioFile, error) {
 	f.calls++
+	if f.err != nil && !f.startedFirst {
+		return extract.AudioFile{}, f.err // falhou ao sondar (ex.: tweet sem vídeo)
+	}
+	if started != nil {
+		started()
+	}
 	if f.err != nil {
 		return extract.AudioFile{}, f.err
 	}
@@ -401,5 +411,55 @@ func TestNoteWithLinkNeverReadsPage(t *testing.T) {
 	hn.expect("https://www.instagram.com/p/abc/ minha descrição", "Salvo (#1, instagram)")
 	if pg.calls != 0 {
 		t.Fatal("com descrição na mensagem não deve ler a página")
+	}
+}
+
+func (hn *harness) said(sub string) bool {
+	for _, m := range hn.all {
+		if strings.Contains(m, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// Post de texto no X: não há vídeo, então o usuário nunca vê "transcrevendo…".
+func TestTextPostNeverShowsDownloadMessage(t *testing.T) {
+	pg := &fakePages{pg: page.Page{Text: "Um post de texto puro no X, sem nenhum vídeo anexado a ele."}}
+	hn := withPages(t, fakeAI{}, pg)
+	hn.h.Extractor = &fakeExtractor{err: errors.New("No video could be found in this tweet")}
+	hn.expect("https://x.com/user/status/1", "Salvo (#1, x, post)")
+	if hn.said("transcrevendo") || hn.said("Baixando") {
+		t.Fatalf("mostrou aviso de vídeo em post de texto: %q", hn.all)
+	}
+	if !hn.said("Lendo o post") {
+		t.Fatalf("deveria avisar que está lendo o post: %q", hn.all)
+	}
+}
+
+// Vídeo de verdade: o aviso aparece, uma vez, antes do resultado.
+func TestVideoShowsDownloadMessageOnce(t *testing.T) {
+	hn := newHarnessAI(t, fakeAI{audio: speech()})
+	hn.h.Extractor = &fakeExtractor{}
+	hn.expect("https://youtu.be/abc", "transcrito")
+	n := 0
+	for _, m := range hn.all {
+		if strings.Contains(m, "Baixando o áudio") {
+			n++
+		}
+	}
+	if n != 1 || !strings.Contains(hn.all[0], "Baixando o áudio") {
+		t.Fatalf("aviso deveria vir 1 vez e primeiro: %q", hn.all)
+	}
+}
+
+// Vídeo existe mas o download falha: o aviso saiu, depois vem a leitura do post.
+func TestVideoDownloadFailureThenReadsPost(t *testing.T) {
+	pg := &fakePages{pg: page.Page{Text: "Descrição do post com texto suficiente para a análise da IA."}}
+	hn := withPages(t, fakeAI{audio: speech()}, pg)
+	hn.h.Extractor = &fakeExtractor{err: errors.New("yt-dlp quebrou"), startedFirst: true}
+	hn.expect("https://x.com/user/status/1", "Salvo (#1, x, post)")
+	if !hn.said("Baixando o áudio") || !hn.said("Lendo o post") {
+		t.Fatalf("%q", hn.all)
 	}
 }

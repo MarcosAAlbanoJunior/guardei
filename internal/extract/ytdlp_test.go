@@ -62,7 +62,7 @@ func mustURL(t *testing.T, s string) *url.URL {
 func TestAudioOKCleansTempDir(t *testing.T) {
 	var dl []string
 	y := newFake(`{"duration": 19.0, "title": " Me at the zoo ", "is_live": false}`, []byte("mp3"), &dl)
-	af, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"))
+	af, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestAudioOKCleansTempDir(t *testing.T) {
 func TestAudioTooLongSkipsDownload(t *testing.T) {
 	var dl []string
 	y := newFake(`{"duration": 3600, "title": "x", "is_live": false}`, nil, &dl)
-	_, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"))
+	_, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"), nil)
 	var tl *TooLongError
 	if !errors.As(err, &tl) || len(dl) != 0 {
 		t.Fatalf("err=%v downloads=%v", err, dl)
@@ -89,7 +89,7 @@ func TestAudioLiveOrNoDuration(t *testing.T) {
 	var dl []string
 	for _, meta := range []string{`{"duration": null, "title": "x", "is_live": true}`, `{"duration": null, "title": "x", "is_live": false}`} {
 		y := newFake(meta, nil, &dl)
-		if _, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x")); !errors.Is(err, ErrNoDuration) {
+		if _, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"), nil); !errors.Is(err, ErrNoDuration) {
 			t.Fatalf("%s: %v", meta, err)
 		}
 	}
@@ -98,7 +98,7 @@ func TestAudioLiveOrNoDuration(t *testing.T) {
 func TestAudioTooLargeAndCleanup(t *testing.T) {
 	var dl []string
 	y := newFake(`{"duration": 60, "title": "x", "is_live": false}`, make([]byte, maxAudioBytes+1), &dl)
-	_, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"))
+	_, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"), nil)
 	if !errors.Is(err, ErrTooLarge) {
 		t.Fatal(err)
 	}
@@ -114,7 +114,7 @@ func TestURLGoesAfterDoubleDash(t *testing.T) {
 		seen = args
 		return nil, errors.New("para aqui")
 	}
-	y.Audio(context.Background(), mustURL(t, "https://youtu.be/--exec=evil"))
+	y.Audio(context.Background(), mustURL(t, "https://youtu.be/--exec=evil"), nil)
 	if len(seen) < 2 || seen[len(seen)-2] != "--" {
 		t.Fatalf("URL deve vir depois de --: %v", seen)
 	}
@@ -136,7 +136,7 @@ func TestSupports(t *testing.T) {
 func TestLongAudioIsSplitIntoSegments(t *testing.T) {
 	var dl []string
 	y := newFake(`{"duration": 590, "title": "x", "is_live": false}`, []byte("inteiro"), &dl)
-	af, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"))
+	af, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,7 +158,7 @@ func TestSplitFailureIsAnError(t *testing.T) {
 		}
 		return base(ctx, name, args...)
 	}
-	if _, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x")); err == nil || !strings.Contains(err.Error(), "ffmpeg") {
+	if _, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"), nil); err == nil || !strings.Contains(err.Error(), "ffmpeg") {
 		t.Fatal(err)
 	}
 }
@@ -176,7 +176,7 @@ func TestAlwaysConvertsWithFFmpeg(t *testing.T) {
 		}
 		return base(ctx, name, args...)
 	}
-	af, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"))
+	af, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"), nil)
 	if err != nil || string(af.Segments[0]) != "convertido" {
 		t.Fatalf("%v %q", err, af.Segments)
 	}
@@ -185,5 +185,33 @@ func TestAlwaysConvertsWithFFmpeg(t *testing.T) {
 		if !strings.Contains(joined, want) {
 			t.Errorf("ffmpeg sem %q: %s", want, joined)
 		}
+	}
+}
+
+// O aviso "baixando…" só pode sair quando há vídeo dentro do limite.
+func TestStartedOnlyWhenThereIsAVideoToDownload(t *testing.T) {
+	var dl []string
+	count := func(meta string, probeErr error) int {
+		y := newFake(meta, []byte("mp3"), &dl)
+		if probeErr != nil {
+			y.run = func(context.Context, string, ...string) ([]byte, error) {
+				return []byte("ERROR: No video could be found in this tweet"), probeErr
+			}
+		}
+		n := 0
+		y.Audio(context.Background(), mustURL(t, "https://x.com/u/status/1"), func() { n++ })
+		return n
+	}
+	if n := count(`{"duration": 30, "title": "x", "is_live": false}`, nil); n != 1 {
+		t.Errorf("vídeo válido: started=%d", n)
+	}
+	if n := count("", errors.New("exit 1")); n != 0 { // tweet sem vídeo: a sondagem falha
+		t.Errorf("sem vídeo: started=%d", n)
+	}
+	if n := count(`{"duration": 3600, "title": "x", "is_live": false}`, nil); n != 0 {
+		t.Errorf("vídeo longo: started=%d", n)
+	}
+	if n := count(`{"duration": null, "title": "x", "is_live": true}`, nil); n != 0 {
+		t.Errorf("ao vivo: started=%d", n)
 	}
 }
