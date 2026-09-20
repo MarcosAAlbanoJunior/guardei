@@ -2,9 +2,12 @@ package bot
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
+	"github.com/marcosjunior/guardei/internal/ai"
+	"github.com/marcosjunior/guardei/internal/search"
 	"github.com/marcosjunior/guardei/internal/store"
 )
 
@@ -14,7 +17,9 @@ type harness struct {
 	last string
 }
 
-func newHarness(t *testing.T) *harness {
+func newHarness(t *testing.T) *harness { return newHarnessAI(t, ai.New("", "", "")) }
+
+func newHarnessAI(t *testing.T, client ai.AIClient) *harness {
 	t.Helper()
 	st, err := store.Open(context.Background(), t.TempDir()+"/t.db")
 	if err != nil {
@@ -22,7 +27,9 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { st.Close() })
 	hn := &harness{t: t}
-	hn.h = &Handler{Store: st, Allowed: map[int64]bool{1: true}, SearchLimit: 5,
+	hn.h = &Handler{Store: st, AI: client, AIInfo: "fake",
+		Searcher: &search.Searcher{Store: st, AI: client, Index: search.NewIndex()},
+		Allowed:  map[int64]bool{1: true}, SearchLimit: 5,
 		Reply: func(_ context.Context, _ int64, text string) { hn.last = text }}
 	return hn
 }
@@ -94,4 +101,67 @@ func TestUnauthorizedIgnored(t *testing.T) {
 	if hn.last != "" {
 		t.Fatalf("respondeu a usuário não autorizado: %q", hn.last)
 	}
+}
+
+// fakeAI: resumo = "Resumo: "+texto; embeddings em 2 dimensões (comida, esporte).
+type fakeAI struct{ down bool }
+
+func (fakeAI) Enabled() bool { return true }
+func (fakeAI) AnalyzeAudio(context.Context, []byte, string) (ai.Analysis, error) {
+	return ai.Analysis{}, nil
+}
+func (f fakeAI) AnalyzeText(_ context.Context, text string) (ai.Analysis, error) {
+	if f.down {
+		return ai.Analysis{}, errors.New("fora do ar")
+	}
+	return ai.Analysis{HasSpeech: true, Summary: "Resumo: " + text, Tags: []string{"tag1", "tag2"}}, nil
+}
+func (f fakeAI) Embed(_ context.Context, text string, _ ai.EmbedTask) ([]float32, error) {
+	if f.down {
+		return nil, errors.New("fora do ar")
+	}
+	t := strings.ToLower(text)
+	switch {
+	case strings.Contains(t, "queijo"), strings.Contains(t, "comida"):
+		return []float32{1, 0}, nil
+	case strings.Contains(t, "perna"), strings.Contains(t, "esporte"):
+		return []float32{0, 1}, nil
+	}
+	return []float32{0.1, 0.1}, nil
+}
+
+func TestAISavesSummaryTagsAndFindsBySemantics(t *testing.T) {
+	hn := newHarnessAI(t, fakeAI{})
+	hn.expect("https://example.com/a pão de queijo mineiro", "Resumo: pão de queijo mineiro")
+	hn.expect("/recentes", "Resumo: pão de queijo mineiro")
+	hn.expect("comida", "#1") // "comida" não está no texto: só o embedding acha
+	hn.expect("/status", "Com embedding: 1")
+
+	hn.expect("/editar 1 treino de perna", "atualizada")
+	hn.expect("esporte", "#1")
+	hn.expect("comida", "Não achei nada")
+}
+
+func TestAIDownDegradesToManualAndReindexRecovers(t *testing.T) {
+	down := fakeAI{down: true}
+	hn := newHarnessAI(t, down)
+	// IA fora do ar: salva só com a descrição, sem erro para o usuário.
+	hn.expect("https://example.com/a pão de queijo", "Salvo (#1, other):\npão de queijo")
+	hn.expect("queijo", "#1") // FTS continua funcionando
+	hn.expect("comida", "Não achei nada")
+
+	// IA volta: /reindexar completa resumo e embedding.
+	hn.h.AI = fakeAI{}
+	hn.h.Searcher.AI = fakeAI{}
+	hn.expect("/reindexar", "Reindexados 1 de 1")
+	hn.expect("comida", "#1")
+	hn.expect("/reindexar", "já têm embedding")
+	hn.expect("/apagar 1", "apagado")
+	hn.expect("comida", "Não achei nada")
+}
+
+func TestReindexWithoutAI(t *testing.T) {
+	hn := newHarness(t)
+	hn.expect("/reindexar", "desligada")
+	hn.expect("/status", "desligada")
 }

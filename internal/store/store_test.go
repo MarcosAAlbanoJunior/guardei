@@ -39,7 +39,7 @@ func TestInsertSearchUpdateDelete(t *testing.T) {
 		t.Fatalf("busca: %v %v", hits, err)
 	}
 
-	if err := s.UpdateNote(ctx, 1, id, "treino de perna na academia"); err != nil {
+	if err := s.UpdateContent(ctx, 1, id, "treino de perna na academia", "", nil); err != nil {
 		t.Fatal(err)
 	}
 	if hits, _ = s.SearchFTS(ctx, 1, `"queijo"*`, 5); len(hits) != 0 {

@@ -7,8 +7,10 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/marcosjunior/guardei/internal/ai"
 	"github.com/marcosjunior/guardei/internal/bot"
 	"github.com/marcosjunior/guardei/internal/config"
+	"github.com/marcosjunior/guardei/internal/search"
 	"github.com/marcosjunior/guardei/internal/store"
 )
 
@@ -33,7 +35,20 @@ func run() error {
 	}
 	defer st.Close()
 
-	h := &bot.Handler{Store: st, Allowed: cfg.AllowedUsers, SearchLimit: cfg.SearchLimit}
-	slog.Info("bot iniciado", "db", cfg.DBPath)
+	client := ai.New(cfg.GeminiAPIKey, cfg.GeminiModel, cfg.GeminiEmbeddingModel)
+	index := search.NewIndex()
+	if err := index.Load(ctx, st); err != nil {
+		return err
+	}
+
+	h := &bot.Handler{
+		Store:       st,
+		AI:          client,
+		Searcher:    &search.Searcher{Store: st, AI: client, Index: index},
+		AIInfo:      cfg.GeminiModel + " + " + cfg.GeminiEmbeddingModel,
+		Allowed:     cfg.AllowedUsers,
+		SearchLimit: cfg.SearchLimit,
+	}
+	slog.Info("bot iniciado", "db", cfg.DBPath, "ia", client.Enabled(), "vetores", index.Len())
 	return bot.Run(ctx, cfg.TelegramToken, h)
 }

@@ -183,12 +183,6 @@ func (s *Store) Get(ctx context.Context, userID, id int64) (Item, error) {
 	return it, err
 }
 
-// UpdateNote troca a descrição do usuário (e reindexa via trigger).
-func (s *Store) UpdateNote(ctx context.Context, userID, id int64, note string) error {
-	return s.affect(s.db.ExecContext(ctx,
-		`UPDATE items SET user_note = ? WHERE user_id = ? AND id = ?`, nullable(note), userID, id))
-}
-
 func (s *Store) Delete(ctx context.Context, userID, id int64) error {
 	return s.affect(s.db.ExecContext(ctx, `DELETE FROM items WHERE user_id = ? AND id = ?`, userID, id))
 }

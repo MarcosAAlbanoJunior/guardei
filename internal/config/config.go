@@ -14,6 +14,10 @@ type Config struct {
 	AllowedUsers  map[int64]bool
 	DBPath        string
 	SearchLimit   int
+
+	GeminiAPIKey         string // vazio liga o modo manual
+	GeminiModel          string
+	GeminiEmbeddingModel string
 }
 
 // Load lê o ambiente. Só TELEGRAM_BOT_TOKEN e ALLOWED_USER_IDS são obrigatórias.
@@ -21,7 +25,11 @@ func Load() (Config, error) {
 	c := Config{
 		TelegramToken: os.Getenv("TELEGRAM_BOT_TOKEN"),
 		DBPath:        envOr("DB_PATH", "./data/app.db"),
-		AllowedUsers:  map[int64]bool{},
+
+		GeminiAPIKey:         os.Getenv("GEMINI_API_KEY"),
+		GeminiModel:          envOr("GEMINI_MODEL", "gemini-2.5-flash-lite"),
+		GeminiEmbeddingModel: envOr("GEMINI_EMBEDDING_MODEL", "gemini-embedding-2"),
+		AllowedUsers:         map[int64]bool{},
 	}
 	if c.TelegramToken == "" {
 		return c, errors.New("TELEGRAM_BOT_TOKEN é obrigatória")

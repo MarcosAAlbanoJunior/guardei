@@ -8,7 +8,9 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/marcosjunior/guardei/internal/ai"
 	"github.com/marcosjunior/guardei/internal/platform"
 	"github.com/marcosjunior/guardei/internal/search"
 	"github.com/marcosjunior/guardei/internal/store"
@@ -18,11 +20,15 @@ const (
 	reasonUpdate = "atualizar:" // pending de atualização de item existente: "atualizar:<id>"
 	recentLimit  = 10
 	maxSnippet   = 90
+	aiTimeout    = 30 * time.Second
 )
 
 // Handler processa mensagens já desacopladas do Telegram, o que permite testar o fluxo.
 type Handler struct {
 	Store       *store.Store
+	AI          ai.AIClient
+	Searcher    *search.Searcher
+	AIInfo      string // texto do /status, ex.: nomes dos modelos
 	Allowed     map[int64]bool
 	SearchLimit int
 	Reply       func(ctx context.Context, chatID int64, text string)
@@ -89,8 +95,11 @@ func (h *Handler) command(ctx context.Context, userID, chatID int64, text string
 		case err != nil:
 			return err
 		default:
+			h.Searcher.Index.Remove(id)
 			h.Reply(ctx, chatID, fmt.Sprintf("Item #%d apagado.", id))
 		}
+	case "/reindexar":
+		return h.reindex(ctx, userID, chatID)
 	case "/cancelar":
 		ok, err := h.Store.ClearPending(ctx, chatID)
 		if err != nil {
@@ -106,7 +115,15 @@ func (h *Handler) command(ctx context.Context, userID, chatID int64, text string
 		if err != nil {
 			return err
 		}
-		h.Reply(ctx, chatID, fmt.Sprintf("IA: desligada (modo manual)\nItens salvos: %d", n))
+		if !h.AI.Enabled() {
+			h.Reply(ctx, chatID, fmt.Sprintf("IA: desligada (modo manual)\nItens salvos: %d", n))
+			return nil
+		}
+		emb, err := h.Store.CountEmbedded(ctx, userID)
+		if err != nil {
+			return err
+		}
+		h.Reply(ctx, chatID, fmt.Sprintf("IA: ligada (%s)\nItens salvos: %d\nCom embedding: %d", h.AIInfo, n, emb))
 	default:
 		h.Reply(ctx, chatID, "Comando desconhecido. Veja /help.")
 	}
@@ -140,14 +157,107 @@ func (h *Handler) edit(ctx context.Context, userID, chatID int64, args string) e
 }
 
 func (h *Handler) applyNote(ctx context.Context, userID, chatID, id int64, note string) error {
-	if err := h.Store.UpdateNote(ctx, userID, id, note); err != nil {
+	summary, tags := h.analyze(ctx, note)
+	if err := h.Store.UpdateContent(ctx, userID, id, note, summary, tags); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			h.Reply(ctx, chatID, fmt.Sprintf("Não achei o item #%d.", id))
 			return nil
 		}
 		return err
 	}
+	// O conteúdo mudou: o vetor antigo saiu do banco e sai do índice também.
+	h.Searcher.Index.Remove(id)
+	h.embed(ctx, userID, id, embedText(store.Item{UserNote: note, Summary: summary, Tags: tags}))
 	h.Reply(ctx, chatID, fmt.Sprintf("Descrição do item #%d atualizada.", id))
+	return nil
+}
+
+// analyze pede resumo e tags à IA. Sem IA ou com falha, devolve vazio: o item
+// é salvo só com a descrição e o /reindexar completa depois.
+func (h *Handler) analyze(ctx context.Context, note string) (string, []string) {
+	if !h.AI.Enabled() {
+		return "", nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, aiTimeout)
+	defer cancel()
+	a, err := h.AI.AnalyzeText(ctx, note)
+	if err != nil {
+		slog.Warn("análise por IA falhou; salvando só a descrição", "err", err)
+		return "", nil
+	}
+	return a.Summary, a.Tags
+}
+
+// embed gera e guarda o vetor do item; falha é registrada e não interrompe o fluxo.
+func (h *Handler) embed(ctx context.Context, userID, id int64, text string) bool {
+	if !h.AI.Enabled() {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, aiTimeout)
+	defer cancel()
+	v, err := h.AI.Embed(ctx, text, ai.TaskDocument)
+	if err == nil {
+		err = h.Store.SetEmbedding(ctx, userID, id, v)
+	}
+	if err != nil {
+		slog.Warn("embedding falhou; use /reindexar depois", "item", id, "err", err)
+		return false
+	}
+	h.Searcher.Index.Set(userID, id, v)
+	return true
+}
+
+// embedText junta o que descreve o item, do mais para o menos condensado.
+func embedText(it store.Item) string {
+	var parts []string
+	for _, s := range []string{it.Title, it.Summary} {
+		if s != "" {
+			parts = append(parts, s)
+		}
+	}
+	if len(it.Tags) > 0 {
+		parts = append(parts, "Tags: "+strings.Join(it.Tags, ", "))
+	}
+	if it.UserNote != "" {
+		parts = append(parts, it.UserNote)
+	}
+	return strings.Join(parts, "\n")
+}
+
+// reindex completa resumo, tags e embedding dos itens salvos antes de a IA existir.
+func (h *Handler) reindex(ctx context.Context, userID, chatID int64) error {
+	if !h.AI.Enabled() {
+		h.Reply(ctx, chatID, "A IA está desligada (sem GEMINI_API_KEY). Nada a reindexar.")
+		return nil
+	}
+	items, err := h.Store.WithoutEmbedding(ctx, userID)
+	if err != nil {
+		return err
+	}
+	if len(items) == 0 {
+		h.Reply(ctx, chatID, "Todos os itens já têm embedding.")
+		return nil
+	}
+	h.Reply(ctx, chatID, fmt.Sprintf("Reindexando %d itens…", len(items)))
+	done := 0
+	for _, it := range items {
+		if it.Summary == "" && it.UserNote != "" {
+			if summary, tags := h.analyze(ctx, it.UserNote); summary != "" {
+				if err := h.Store.UpdateContent(ctx, userID, it.ID, it.UserNote, summary, tags); err != nil {
+					return err
+				}
+				it.Summary, it.Tags = summary, tags
+			}
+		}
+		if h.embed(ctx, userID, it.ID, embedText(it)) {
+			done++
+		}
+	}
+	msg := fmt.Sprintf("Reindexados %d de %d itens.", done, len(items))
+	if done < len(items) {
+		msg += " Os demais falharam; tente /reindexar de novo daqui a pouco."
+	}
+	h.Reply(ctx, chatID, msg)
 	return nil
 }
 
@@ -181,7 +291,7 @@ func (h *Handler) link(ctx context.Context, userID, chatID int64, raw, note stri
 	if note != "" {
 		return h.save(ctx, userID, chatID, raw, canonical, plat, note)
 	}
-	reason := manualReason(plat)
+	reason := h.manualReason(plat)
 	if err := h.Store.SetPending(ctx, store.Pending{ChatID: chatID, URL: raw, Reason: reason}); err != nil {
 		return err
 	}
@@ -189,11 +299,14 @@ func (h *Handler) link(ctx context.Context, userID, chatID int64, raw, note stri
 	return nil
 }
 
-func manualReason(plat string) string {
-	if !platform.Extract[plat] {
+func (h *Handler) manualReason(plat string) string {
+	switch {
+	case !platform.Extract[plat]:
 		return "esta plataforma não tem extração de áudio"
+	case !h.AI.Enabled():
+		return "a IA não está ligada (sem GEMINI_API_KEY)"
 	}
-	return "a transcrição por IA não está ligada"
+	return "a extração de áudio ainda não está disponível"
 }
 
 // describe trata a resposta do usuário a um pedido de descrição.
@@ -214,30 +327,41 @@ func (h *Handler) describe(ctx context.Context, userID, chatID int64, p store.Pe
 }
 
 func (h *Handler) save(ctx context.Context, userID, chatID int64, raw, canonical, plat, note string) error {
-	id, err := h.Store.Insert(ctx, &store.Item{
+	summary, tags := h.analyze(ctx, note)
+	it := store.Item{
 		UserID: userID, URL: raw, CanonicalURL: canonical, Platform: plat,
-		UserNote: note, Source: "manual",
-	})
+		UserNote: note, Summary: summary, Tags: tags, Source: "manual",
+	}
+	id, err := h.Store.Insert(ctx, &it)
 	if err != nil {
 		return err
 	}
-	h.Reply(ctx, chatID, fmt.Sprintf("Salvo (#%d, %s):\n%s", id, plat, snippet(note)))
+	h.embed(ctx, userID, id, embedText(it))
+
+	msg := fmt.Sprintf("Salvo (#%d, %s):\n%s", id, plat, snippet(note))
+	if summary != "" {
+		msg = fmt.Sprintf("Salvo (#%d, %s):\n%s", id, plat, snippet(summary))
+		if len(tags) > 0 {
+			msg += "\nTags: " + strings.Join(tags, ", ")
+		}
+	}
+	h.Reply(ctx, chatID, msg)
 	return nil
 }
 
 func (h *Handler) search(ctx context.Context, userID, chatID int64, query string) error {
-	hits, err := search.Search(ctx, h.Store, userID, query, h.SearchLimit)
+	results, err := h.Searcher.Search(ctx, userID, query, h.SearchLimit)
 	if err != nil {
 		return err
 	}
-	if len(hits) == 0 {
+	if len(results) == 0 {
 		h.Reply(ctx, chatID, "Não achei nada. Tente termos mais gerais.")
 		return nil
 	}
-	hits = search.Pick(hits)
-	items := make([]store.Item, len(hits))
-	for i, hit := range hits {
-		items[i] = hit.Item
+	results = search.Pick(results)
+	items := make([]store.Item, len(results))
+	for i, r := range results {
+		items[i] = r.Item
 	}
 	title := "Achei:"
 	if len(items) > 1 {
@@ -288,5 +412,6 @@ const helpText = `Guardei: salve links de vídeos e ache depois.
 /recentes — últimos itens
 /editar <id> [texto] — troca a descrição
 /apagar <id> — remove um item
+/reindexar — gera resumo e embeddings pendentes
 /cancelar — cancela a espera por descrição
 /status — estado do bot`
