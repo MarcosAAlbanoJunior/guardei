@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -103,7 +105,7 @@ func TestBlockedAndNoContent(t *testing.T) {
 				html200(`<head><title>Página qualquer com texto o bastante para passar</title></head>`)(w, r)
 				return
 			}
-			http.Redirect(w, r, "/accounts/login/?next=/p/x", 302)
+			http.Redirect(w, r, "/accounts/login/?next=/p/x", http.StatusFound)
 		}, ErrBlocked},
 		"vazia": {html200(`<head><title>Oi</title></head>`), ErrNoContent},
 		"nao-html": {func(w http.ResponseWriter, r *http.Request) {
@@ -125,7 +127,7 @@ func TestRefusesInternalAddresses(t *testing.T) {
 		t.Fatalf("deveria recusar loopback: %v", err)
 	}
 	// redirecionamento de um site público para dentro da rede: também recusado
-	redir := httptest.NewServer(http.RedirectHandler(srv.URL, 302))
+	redir := httptest.NewServer(http.RedirectHandler(srv.URL, http.StatusFound))
 	defer redir.Close()
 	if _, err := NewHTTP().Read(context.Background(), redir.URL); err == nil {
 		t.Fatal("deveria recusar")
@@ -155,3 +157,6 @@ func TestIsInternal(t *testing.T) {
 		}
 	}
 }
+
+func mustParse(s string) *url.URL { u, _ := url.Parse(s); return u }
+func parseIP(s string) net.IP     { return net.ParseIP(s) }

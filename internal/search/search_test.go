@@ -108,3 +108,30 @@ func TestHybridFindsBySemanticsAndFallsBackToFTS(t *testing.T) {
 		t.Fatalf("sem semântica não deveria achar: %+v", got)
 	}
 }
+
+func TestIndexLoadFromStore(t *testing.T) {
+	ctx := context.Background()
+	st, err := store.Open(ctx, t.TempDir()+"/t.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer st.Close()
+	a, _ := st.Insert(ctx, &store.Item{UserID: 1, URL: "a", CanonicalURL: "a", Platform: "x", Source: "manual"})
+	st.Insert(ctx, &store.Item{UserID: 1, URL: "b", CanonicalURL: "b", Platform: "x", Source: "manual"}) // sem vetor
+	st.SetEmbedding(ctx, 1, a, []float32{1, 0})
+
+	ix := NewIndex()
+	if err := ix.Load(ctx, st); err != nil {
+		t.Fatal(err)
+	}
+	if ix.Len() != 1 {
+		t.Fatalf("len=%d", ix.Len())
+	}
+	if got := ix.Nearest(1, []float32{1, 0}, 5, 0.9); len(got) != 1 || got[0].ID != a {
+		t.Fatalf("%+v", got)
+	}
+	ix.Remove(a)
+	if ix.Len() != 0 {
+		t.Fatal("Remove não removeu")
+	}
+}

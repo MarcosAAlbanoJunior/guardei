@@ -215,3 +215,41 @@ func TestStartedOnlyWhenThereIsAVideoToDownload(t *testing.T) {
 		t.Errorf("ao vivo: started=%d", n)
 	}
 }
+
+func TestAvailable(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("PATH", dir)
+	if err := Available("yt-dlp"); err == nil || !strings.Contains(err.Error(), "yt-dlp") {
+		t.Fatalf("sem binários: %v", err)
+	}
+	for _, name := range []string{"yt-dlp", "ffmpeg"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Available("yt-dlp"); err != nil {
+		t.Fatalf("com binários: %v", err)
+	}
+	os.Remove(filepath.Join(dir, "ffmpeg"))
+	if err := Available("yt-dlp"); err == nil || !strings.Contains(err.Error(), "ffmpeg") {
+		t.Fatalf("sem ffmpeg: %v", err)
+	}
+}
+
+func TestSelfUpdate(t *testing.T) {
+	y := NewYtDlp("yt-dlp", time.Minute)
+	var args []string
+	y.run = func(_ context.Context, name string, a ...string) ([]byte, error) {
+		args = a
+		return []byte("Updated yt-dlp to 2026.09.01\n"), nil
+	}
+	if err := y.SelfUpdate(context.Background()); err != nil || len(args) != 1 || args[0] != "-U" {
+		t.Fatalf("%v %v", err, args)
+	}
+	y.run = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("ERROR: no write permission"), errors.New("exit 1")
+	}
+	if err := y.SelfUpdate(context.Background()); err == nil || !strings.Contains(err.Error(), "no write permission") {
+		t.Fatalf("%v", err)
+	}
+}

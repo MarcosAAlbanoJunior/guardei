@@ -1,3 +1,5 @@
+//go:build live
+
 package ai
 
 import (
@@ -8,7 +10,7 @@ import (
 	"time"
 )
 
-// Teste contra a API real: só roda com GEMINI_API_KEY definida.
+// Testes contra a API real (go test -tags live ./internal/ai): exigem GEMINI_API_KEY.
 func liveClient(t *testing.T) Client {
 	t.Helper()
 	key := os.Getenv("GEMINI_API_KEY")

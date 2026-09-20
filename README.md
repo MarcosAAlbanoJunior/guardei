@@ -141,31 +141,37 @@ Só há uma extração de áudio por vez, e `yt-dlp` e `ffmpeg` rodam em sequên
 ## Desenvolvimento
 
 ```bash
-go vet ./... && go test ./...
+gofmt -l .                       # deve listar nada
+go vet ./... && go vet -tags live ./...
+go test -race ./...
 ```
 
-Os testes com a API real ficam ignorados sem as variáveis. Para rodá-los:
+Os testes com serviços reais (Gemini, `yt-dlp`, sites) só rodam com a tag `live`, para nunca acontecerem por acidente:
 
 ```bash
 set -a; . ./.env; set +a
-go test ./internal/ai -run Live -v                       # Gemini: texto e áudio
+go test -tags live ./internal/ai -run Live -v            # Gemini: texto e áudio
 LIVE_VIDEO_URLS="https://youtu.be/..." LIVE_QUERIES="termo;outro termo" \
-  go test ./internal/bot -run Live -v                    # ponta a ponta, com yt-dlp
+  go test -tags live ./internal/bot -run LiveVideos -v   # vídeo ponta a ponta
+LIVE_POST_URLS="https://x.com/..." \
+  go test -tags live ./internal/bot -run LivePosts -v    # posts e páginas
 ```
 
 Estrutura:
 
 ```
 cmd/bot/            ponto de entrada
-internal/bot/       handlers do Telegram e máquina de estados
+internal/bot/       conversa: handlers, comandos, fluxo de links e posts
 internal/platform/  detecção de plataforma e URL canônica
 internal/extract/   yt-dlp + ffmpeg (download, conversão, fatiamento)
 internal/page/      leitura do texto público de posts e páginas (Open Graph e HTML)
-internal/ai/        AIClient, Gemini e a versão sem IA
+internal/ai/        interface Client, Gemini e a versão sem IA
 internal/store/     SQLite, migrações, FTS5
 internal/search/    FTS, cosseno e RRF
 migrations/         SQL aplicado na inicialização
 ```
+
+Não há mocks de rede: os testes de `internal/bot` usam dublês das interfaces `ai.Client`, `extract.Extractor` e `page.Reader`, e os de `internal/ai` e `internal/page` sobem servidores HTTP locais.
 
 ## Licença
 

@@ -129,3 +129,103 @@ func TestMigrationConvertsLegacyPending(t *testing.T) {
 		t.Fatalf("espera de link novo alterada: %+v", p)
 	}
 }
+
+func TestGetFindRecentCountAreScopedToUser(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	a, _ := s.Insert(ctx, &Item{UserID: 1, URL: "u1", CanonicalURL: "c1", Platform: "x", Title: "T", Tags: []string{"a", "b"}, Source: "page"})
+	b, _ := s.Insert(ctx, &Item{UserID: 1, URL: "u2", CanonicalURL: "c2", Platform: "x", Source: "manual"})
+	s.Insert(ctx, &Item{UserID: 2, URL: "u1", CanonicalURL: "c1", Platform: "x", Source: "manual"}) // mesma URL, outro usuário
+
+	it, err := s.Get(ctx, 1, a)
+	if err != nil || it.Title != "T" || len(it.Tags) != 2 || it.Source != "page" || it.CreatedAt.IsZero() {
+		t.Fatalf("%+v %v", it, err)
+	}
+	if _, err := s.Get(ctx, 2, a); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("usuário 2 leu item do 1: %v", err)
+	}
+	if f, err := s.FindByCanonical(ctx, 1, "c2"); err != nil || f.ID != b {
+		t.Fatalf("%+v %v", f, err)
+	}
+	if _, err := s.FindByCanonical(ctx, 1, "nao-existe"); !errors.Is(err, ErrNotFound) {
+		t.Fatal(err)
+	}
+	if n, _ := s.Count(ctx, 1); n != 2 {
+		t.Fatalf("count=%d", n)
+	}
+	recent, _ := s.Recent(ctx, 1, 10)
+	if len(recent) != 2 || recent[0].ID != b { // mais novo primeiro
+		t.Fatalf("%+v", recent)
+	}
+	if recent, _ = s.Recent(ctx, 1, 1); len(recent) != 1 {
+		t.Fatalf("limite ignorado: %d", len(recent))
+	}
+}
+
+func TestEmbeddingLifecycle(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	id, _ := s.Insert(ctx, &Item{UserID: 1, URL: "u", CanonicalURL: "c", Platform: "x", UserNote: "nota", Source: "manual"})
+
+	if missing, _ := s.WithoutEmbedding(ctx, 1); len(missing) != 1 {
+		t.Fatal("item novo deveria estar sem embedding")
+	}
+	if err := s.SetEmbedding(ctx, 1, id, []float32{0.5, -1.25, 3}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CountEmbedded(ctx, 1); n != 1 {
+		t.Fatalf("embedded=%d", n)
+	}
+	rows, err := s.AllVectors(ctx)
+	if err != nil || len(rows) != 1 || rows[0].ID != id || rows[0].UserID != 1 ||
+		len(rows[0].Vec) != 3 || rows[0].Vec[1] != -1.25 {
+		t.Fatalf("%+v %v", rows, err)
+	}
+	if err := s.SetEmbedding(ctx, 2, id, []float32{1}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("outro usuário gravou vetor: %v", err)
+	}
+
+	// trocar o conteúdo invalida o vetor
+	if err := s.UpdateContent(ctx, 1, id, "nova nota", "resumo", []string{"t"}); err != nil {
+		t.Fatal(err)
+	}
+	if missing, _ := s.WithoutEmbedding(ctx, 1); len(missing) != 1 || missing[0].Summary != "resumo" {
+		t.Fatalf("vetor antigo deveria ter sido limpo: %+v", missing)
+	}
+}
+
+func TestVectorEncoding(t *testing.T) {
+	in := []float32{0, 1.5, -2.25, 1e-7}
+	out := DecodeVector(EncodeVector(in))
+	if len(out) != len(in) {
+		t.Fatal(out)
+	}
+	for i := range in {
+		if in[i] != out[i] {
+			t.Errorf("%d: %v != %v", i, in[i], out[i])
+		}
+	}
+	if EncodeVector(nil) != nil {
+		t.Error("vetor vazio deveria virar nil (NULL no banco)")
+	}
+}
+
+func TestOpenTwiceKeepsDataAndMigrationsOnce(t *testing.T) {
+	ctx := context.Background()
+	path := t.TempDir() + "/again.db"
+	s1, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s1.Insert(ctx, &Item{UserID: 1, URL: "u", CanonicalURL: "c", Platform: "x", Source: "manual"})
+	s1.Close()
+
+	s2, err := Open(ctx, path)
+	if err != nil {
+		t.Fatalf("reabrir falhou (migração reaplicada?): %v", err)
+	}
+	defer s2.Close()
+	if n, _ := s2.Count(ctx, 1); n != 1 {
+		t.Fatalf("perdeu dados: %d", n)
+	}
+}
