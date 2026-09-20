@@ -160,12 +160,12 @@ Conteúdo salvo em vários apps se perde, porque cada um tem sua lista e uma bus
 
 | Você envia | O bot faz |
 | --- | --- |
-| Link de vídeo do YouTube, TikTok ou X, sozinho | Baixa o áudio, transcreve com o Gemini e salva título, resumo e tags. |
+| Link de vídeo do YouTube, TikTok ou X, sozinho | Baixa o áudio, transcreve com o Gemini e salva título, resumo e tags. Se o vídeo não tem fala, é longo demais, está ao vivo ou o áudio não pôde ser baixado, usa o **título e a descrição** do vídeo. |
 | Link de post (Instagram, X, LinkedIn) ou de qualquer página, sozinho | Lê o texto público do post e o Gemini gera título, resumo e tags. |
 | Link + texto na mesma mensagem | Salva com o seu texto como descrição, sem ler nada. |
 | Texto sem link | Busca nos itens salvos. |
 
-Para cada link o bot tenta o caminho automático (áudio, depois texto do post). Se não for possível (sem chave, vídeo longo, sem fala, post privado, site pedindo login ou bloqueando), ele diz o motivo e pede a descrição, que você responde em texto. Um link repetido (mesma URL canônica) avisa que já está salvo e oferece atualizar a descrição.
+Para cada link o bot tenta o caminho automático: o áudio; se não servir, o título e a descrição do vídeo; e, para posts e páginas, o texto público. Se nada disso for possível (sem chave, post privado, site pedindo login ou bloqueando, ou quase nenhum texto), ele diz o motivo e pede a descrição, que você responde em texto. Um link repetido (mesma URL canônica) avisa que já está salvo e oferece atualizar a descrição.
 
 A busca é sempre full-text (SQLite FTS5, sem diferenciar acentos, com prefixo, e `receitas` acha `receita`). Com chave Gemini ela vira híbrida: soma a busca semântica (embeddings) por *reciprocal rank fusion*, e assim "comida mineira" acha um vídeo de pão de queijo.
 
@@ -257,8 +257,8 @@ go run ./cmd/bot
 - **Só texto:** imagens, carrosséis e vídeos sem áudio em posts não são analisados, só a legenda.
 - **Buscas:** cada busca lista no máximo 100 resultados (aparece `100+`). Buscas genéricas trazem muitos itens de relevância parecida, e a ordem entre eles é quase arbitrária: use os botões de período, os filtros escritos ou um termo mais específico. O corte de relevância da busca por sentido foi calibrado com poucos dados, e pode pedir ajuste na sua coleção.
 - **TikTok e X são "melhor esforço":** o `yt-dlp` pode falhar sem aviso (IP bloqueado, post protegido, login exigido) e o bot cai na descrição. O X exige login para quase tudo hoje, então espere falhas. Links curtos do TikTok (`vm.tiktok.com`) não são resolvidos, então a detecção de duplicatas não os reconhece.
-- **Vídeos longos:** acima de `MAX_VIDEO_SECONDS` o bot pede descrição. O áudio é fatiado em pedaços de 5 minutos e cada um é transcrito à parte. Enviar 25 minutos de uma vez fez o modelo parar na metade ou entrar em repetição. Acima de uns 60 minutos o áudio passa de 15 MB e é recusado.
-- **Áudio sem fala** (música, ruído) é descartado, e o bot pede descrição.
+- **Vídeos longos:** acima de `MAX_VIDEO_SECONDS` o bot não transcreve e usa o título e a descrição do vídeo. O áudio é fatiado em pedaços de 5 minutos e cada um é transcrito à parte. Enviar 25 minutos de uma vez fez o modelo parar na metade ou entrar em repetição. Acima de uns 60 minutos o áudio passa de 15 MB e é recusado.
+- **Vídeos sem fala** (música, ruído, ao vivo) e os que o YouTube não deixa baixar: o bot usa título, descrição completa, canal e tags do vídeo, lidos pelo `yt-dlp`. O item aparece como `por título e descrição`, e o resumo vem só desses textos (a IA é instruída a não afirmar o que o vídeo mostra ou diz), então vale conferir. Sem descrição nem título úteis, o bot pede a sua.
 - O bot guarda só link, texto e metadados. Não guarda o vídeo.
 - Sem stemmer para português no FTS5: a busca por prefixo e a semântica compensam. Sem chave, "corrida" não acha "correr".
 

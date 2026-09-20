@@ -64,18 +64,19 @@ func (h *Handler) alreadySaved(ctx context.Context, userID, chatID int64, raw, n
 // outcome é o resultado de uma tentativa automática. reason vazio = salvou.
 type outcome struct {
 	reason   string
-	readPage bool // vale tentar ler a página como alternativa
+	readPage bool // vale tentar ler o texto do link como alternativa
+	video    bool // o vídeo existe, mas o áudio não serviu: sobram título e descrição
 }
 
 // auto salva o link sem ajuda do usuário: primeiro pela transcrição do áudio
-// (vídeos) e, se não der, lendo o texto do post. Devolve "" quando salvou, ou o
-// motivo de precisar pedir a descrição.
+// (vídeos) e, se não der, pelo texto do link (título e descrição do vídeo, ou o
+// texto do post). Devolve "" quando salvou, ou o motivo de precisar pedir a descrição.
 func (h *Handler) auto(ctx context.Context, userID, chatID int64, raw, canonical, plat string) (string, error) {
 	o, err := h.transcribe(ctx, userID, chatID, raw, canonical, plat)
 	if err != nil || o.reason == "" || !o.readPage {
 		return o.reason, err
 	}
-	reason, err := h.readPost(ctx, userID, chatID, raw, canonical, plat)
+	reason, err := h.readPost(ctx, userID, chatID, raw, canonical, plat, o)
 	if err != nil || reason == "" {
 		return "", err
 	}
@@ -102,16 +103,19 @@ func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, can
 	})
 	if err != nil {
 		slog.Warn("extração de áudio falhou", "url", raw, "err", err)
-		return extractionFailure(err), nil
+		o := extractionFailure(err)
+		// YouTube e TikTok só têm vídeos; o X também tem posts de texto, que não têm vídeo para baixar.
+		o.video = o.video || plat == platform.YouTube || plat == platform.TikTok
+		return o, nil
 	}
 
 	a, err := ai.AnalyzeSegments(ctx, h.AI, af.Segments, af.Mime)
 	if err != nil {
 		slog.Warn("transcrição por IA falhou", "url", raw, "err", err)
-		return outcome{reason: "a IA não conseguiu transcrever"}, nil
+		return outcome{reason: "a IA não conseguiu transcrever", readPage: true, video: true}, nil
 	}
 	if !a.HasSpeech {
-		return outcome{reason: "o vídeo não tem fala (só música ou ruído)"}, nil
+		return outcome{reason: "o vídeo não tem fala (só música ou ruído)", readPage: true, video: true}, nil
 	}
 
 	it := store.Item{
@@ -127,16 +131,17 @@ func (h *Handler) transcribe(ctx context.Context, userID, chatID int64, raw, can
 	return outcome{}, nil
 }
 
-// extractionFailure traduz o erro do extrator no motivo mostrado ao usuário.
+// extractionFailure traduz o erro do extrator no motivo mostrado ao usuário. Em
+// todos os casos ainda há texto para ler: título e descrição do vídeo, ou o post.
 func extractionFailure(err error) outcome {
 	var tooLong *extract.TooLongError
 	switch {
 	case errors.As(err, &tooLong):
-		return outcome{reason: fmt.Sprintf("o vídeo é longo demais (%s; o máximo é %s)", fmtDuration(tooLong.Duration), fmtDuration(tooLong.Max))}
+		return outcome{reason: fmt.Sprintf("o vídeo é longo demais (%s; o máximo é %s)", fmtDuration(tooLong.Duration), fmtDuration(tooLong.Max)), readPage: true, video: true}
 	case errors.Is(err, extract.ErrNoDuration):
-		return outcome{reason: "não consegui saber a duração (transmissão ao vivo?)"}
+		return outcome{reason: "não consegui saber a duração (transmissão ao vivo?)", readPage: true, video: true}
 	case errors.Is(err, extract.ErrTooLarge):
-		return outcome{reason: "o áudio ficou grande demais"}
+		return outcome{reason: "o áudio ficou grande demais", readPage: true, video: true}
 	}
 	// Sem vídeo para baixar (ex.: post de texto no X) ou bloqueio: o texto do post ainda pode servir.
 	return outcome{reason: "não consegui baixar o áudio", readPage: true}

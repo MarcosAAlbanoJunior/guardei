@@ -253,3 +253,49 @@ func TestSelfUpdate(t *testing.T) {
 		t.Fatalf("%v", err)
 	}
 }
+
+func TestMetadataReadsTitleDescriptionUploaderAndTags(t *testing.T) {
+	var dl []string
+	// o yt-dlp imprime o JSON em uma linha; quebras da descrição vêm como \n escapado
+	meta := `{"duration": 251.0, "title": " Pão de queijo ", "is_live": false, "description": "Ingredientes:\n500g de polvilho\n3 ovos", "uploader": "Ediane - Comida Mineira", "tags": ["receita", "pão de queijo"], "categories": ["Howto & Style"]}`
+	y := newFake(meta, nil, &dl)
+	m, err := y.Metadata(context.Background(), mustURL(t, "https://youtu.be/x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Title != "Pão de queijo" || m.Uploader != "Ediane - Comida Mineira" || m.Duration != 251*time.Second ||
+		!strings.Contains(m.Description, "500g de polvilho") || len(m.Tags) != 2 || m.Categories[0] != "Howto & Style" {
+		t.Fatalf("%+v", m)
+	}
+	if len(dl) != 0 {
+		t.Fatal("Metadata não pode baixar nada")
+	}
+}
+
+// Ao vivo não tem duração, mas título e descrição existem: Metadata devolve, Audio recusa.
+func TestMetadataWorksForLiveStreamsWhileAudioRefuses(t *testing.T) {
+	var dl []string
+	live := `{"duration": null, "title": "Rádio lofi 24h", "is_live": true, "description": "Música para estudar", "uploader": "Lofi", "tags": null}`
+	y := newFake(live, nil, &dl)
+	m, err := y.Metadata(context.Background(), mustURL(t, "https://youtu.be/x"))
+	if err != nil || m.Title != "Rádio lofi 24h" || m.Duration != 0 || m.Description != "Música para estudar" {
+		t.Fatalf("%+v %v", m, err)
+	}
+	if _, err := y.Audio(context.Background(), mustURL(t, "https://youtu.be/x"), nil); !errors.Is(err, ErrNoDuration) {
+		t.Fatalf("Audio deveria recusar transmissão ao vivo: %v", err)
+	}
+}
+
+func TestMetadataFailures(t *testing.T) {
+	y := NewYtDlp("yt-dlp", time.Minute)
+	y.run = func(context.Context, string, ...string) ([]byte, error) {
+		return []byte("ERROR: No video could be found in this tweet"), errors.New("exit 1")
+	}
+	if _, err := y.Metadata(context.Background(), mustURL(t, "https://x.com/u/status/1")); err == nil || !strings.Contains(err.Error(), "No video") {
+		t.Fatalf("%v", err)
+	}
+	y.run = func(context.Context, string, ...string) ([]byte, error) { return []byte("não é json"), nil }
+	if _, err := y.Metadata(context.Background(), mustURL(t, "https://youtu.be/x")); err == nil || !strings.Contains(err.Error(), "ilegíveis") {
+		t.Fatalf("%v", err)
+	}
+}

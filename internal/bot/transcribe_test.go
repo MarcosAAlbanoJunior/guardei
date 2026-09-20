@@ -124,3 +124,126 @@ func TestVideoDownloadFailureThenReadsPost(t *testing.T) {
 		t.Fatalf("%q", hn.all)
 	}
 }
+
+// Receita completa: título e descrição têm bastante texto para o bot entender o vídeo.
+func recipeMeta() extract.Meta {
+	return extract.Meta{
+		Title:       "Pão de queijo com polvilho azedo",
+		Description: "Ingredientes: 500g de polvilho azedo, 3 ovos e 300g de queijo ralado. Modo de preparo no vídeo.",
+		Uploader:    "Ediane - Comida Mineira",
+		Tags:        []string{"receita", "pão de queijo"},
+		Categories:  []string{"Howto & Style"},
+		Duration:    4 * time.Minute,
+	}
+}
+
+// Sem fala, longo demais, ao vivo, áudio grande ou falha da IA: em vez de pedir
+// descrição, o bot usa o título e a descrição do vídeo.
+func TestVideoWithoutUsableAudioFallsBackToTitleAndDescription(t *testing.T) {
+	cases := []struct {
+		name string
+		ex   *fakeExtractor
+		ai   fakeAI
+		why  string
+	}{
+		{"sem fala", &fakeExtractor{}, fakeAI{audio: ai.Analysis{HasSpeech: false}}, "O vídeo não tem fala"},
+		{"longo demais", &fakeExtractor{err: &extract.TooLongError{Duration: 25 * time.Minute, Max: 10 * time.Minute}}, fakeAI{audio: speech()}, "O vídeo é longo demais"},
+		{"ao vivo", &fakeExtractor{err: extract.ErrNoDuration}, fakeAI{audio: speech()}, "Não consegui saber a duração"},
+		{"áudio grande", &fakeExtractor{err: extract.ErrTooLarge}, fakeAI{audio: speech()}, "O áudio ficou grande demais"},
+		{"IA não transcreveu", &fakeExtractor{}, fakeAI{audio: speech(), noAudio: true}, "A IA não conseguiu transcrever"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pg := &fakePages{err: page.ErrBlocked}
+			c.ex.meta = recipeMeta()
+			hn := withPages(t, c.ai, pg)
+			hn.h.Extractor = c.ex
+
+			hn.expect("https://youtu.be/abc", "Salvo (#1, youtube, por título e descrição)")
+			if !hn.said("⏳ "+c.why) || !hn.said("Vou usar o título e a descrição") {
+				t.Errorf("deveria explicar o motivo antes de usar os metadados: %q", hn.all)
+			}
+			if pg.calls != 0 || c.ex.metaCalls != 1 {
+				t.Errorf("metadados bastam: páginas=%d metadados=%d", pg.calls, c.ex.metaCalls)
+			}
+			it := hn.newest(1)[0]
+			if it.Source != "metadata" || it.Title != "Pão de queijo com polvilho azedo" || !strings.Contains(it.Transcript, "300g de queijo ralado") ||
+				!strings.Contains(it.Transcript, "Tags do vídeo: receita, pão de queijo") || it.Summary == "" || len(it.Tags) == 0 {
+				t.Fatalf("%+v", it)
+			}
+			// a descrição entra no índice: acha por um ingrediente que não está no título
+			hn.expect("polvilho", "#1")
+			hn.expect("ovos", "#1")
+			// nada ficou em espera
+			hn.expect("bola", "Não achei nada")
+		})
+	}
+}
+
+// A IA recebe canal, título, descrição e tags, e sabe que é um vídeo sem transcrição.
+func TestVideoMetadataIsWhatTheAIAnalyzes(t *testing.T) {
+	var got ai.Post
+	client := postSpy{fakeAI: fakeAI{audio: ai.Analysis{HasSpeech: false}}, seen: &got}
+	hn := newHarnessAI(t, client)
+	hn.h.Extractor = &fakeExtractor{meta: recipeMeta()}
+	hn.expect("https://youtu.be/abc", "por título e descrição")
+	if got.Title != "Pão de queijo com polvilho azedo" || got.Author != "Ediane - Comida Mineira" || got.Platform != "youtube" ||
+		!strings.Contains(got.Text, "500g de polvilho azedo") || !strings.Contains(got.Text, "Categoria: Howto & Style") {
+		t.Fatalf("%+v", got)
+	}
+}
+
+func TestThinMetadataFallsBackToThePage(t *testing.T) {
+	pg := &fakePages{pg: page.Page{Text: "Texto da página do vídeo com o bastante para a análise da IA seguir."}}
+	hn := withPages(t, fakeAI{audio: ai.Analysis{HasSpeech: false}}, pg)
+	hn.h.Extractor = &fakeExtractor{meta: extract.Meta{Title: "Música", Description: ""}} // 6 caracteres: pouco
+	hn.expect("https://youtu.be/abc", "Salvo (#1, youtube, post)")
+	if pg.calls != 1 {
+		t.Fatal("com metadados curtos, deveria ler a página")
+	}
+
+	hn2 := withPages(t, fakeAI{audio: ai.Analysis{HasSpeech: false}}, &fakePages{pg: page.Page{Text: "Texto da página do vídeo com o bastante para a análise."}})
+	hn2.h.Extractor = &fakeExtractor{metaErr: errors.New("yt-dlp bloqueado")}
+	hn2.expect("https://youtu.be/abc", "Salvo (#1, youtube, post)")
+}
+
+func TestUselessMetadataAndPageAskForDescriptionWithBothReasons(t *testing.T) {
+	// metadados existem, mas a IA vê que não dizem nada (ex.: só "Video 001")
+	hn := withPages(t, fakeAI{audio: ai.Analysis{HasSpeech: false}}, &fakePages{err: page.ErrBlocked})
+	hn.h.Extractor = &fakeExtractor{meta: extract.Meta{Title: "ENTRE OU CADASTRE-SE", Description: "ENTRE OU CADASTRE-SE para ver mais"}}
+	got := hn.say("https://youtu.be/abc")
+	if !strings.Contains(got, "o que consegui ler não descreve o conteúdo") || !strings.Contains(got, "Me diga do que ele trata") {
+		t.Fatalf("%s", got)
+	}
+	hn.expect("vídeo de música", "Salvo (#1, youtube)") // o fluxo manual continua
+}
+
+// Sem IA, nada disso acontece: continua pedindo a descrição.
+func TestNoMetadataFallbackWithoutAI(t *testing.T) {
+	ex := &fakeExtractor{meta: recipeMeta()}
+	hn := newHarness(t)
+	hn.h.Extractor = ex
+	hn.expect("https://youtu.be/abc", "sem GEMINI_API_KEY")
+	if ex.metaCalls != 0 {
+		t.Fatal("sem IA não há o que analisar")
+	}
+}
+
+// Download bloqueado (ex.: HTTP 403 do YouTube): o vídeo existe, então a mensagem
+// fala em título e descrição; no X, sem vídeo, é "lendo o post".
+func TestDownloadFailureWording(t *testing.T) {
+	meta := &fakeExtractor{err: errors.New("yt-dlp: HTTP Error 403: Forbidden"), startedFirst: true, meta: recipeMeta()}
+	hn := withPages(t, fakeAI{audio: speech()}, &fakePages{err: page.ErrBlocked})
+	hn.h.Extractor = meta
+	hn.expect("https://youtu.be/abc", "Salvo (#1, youtube, por título e descrição)")
+	if !hn.said("⏳ Não consegui baixar o áudio. Vou usar o título e a descrição.") {
+		t.Fatalf("%q", hn.all)
+	}
+
+	tw := withPages(t, fakeAI{audio: speech()}, &fakePages{pg: page.Page{Text: "Um post de texto puro no X, sem nenhum vídeo anexado a ele."}})
+	tw.h.Extractor = &fakeExtractor{err: errors.New("No video could be found in this tweet")}
+	tw.expect("https://x.com/u/status/1", "Salvo (#1, x, post)")
+	if tw.said("título e a descrição") || !tw.said("Lendo o post") {
+		t.Fatalf("%q", tw.all)
+	}
+}

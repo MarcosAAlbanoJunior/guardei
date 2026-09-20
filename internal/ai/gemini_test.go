@@ -234,3 +234,16 @@ func TestAnalyzePostTruncatesLongText(t *testing.T) {
 		t.Errorf("texto não foi limitado: %d", n)
 	}
 }
+
+func TestPostPromptTellsVideosHaveNoTranscript(t *testing.T) {
+	var body string
+	g := fakeServer(t, func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		io.WriteString(w, `{"candidates":[{"finishReason":"STOP","content":{"parts":[{"text":"{\"has_content\":true,\"title\":\"t\",\"summary\":\"s\",\"tags\":[]}"}]}}]}`)
+	})
+	g.AnalyzePost(context.Background(), Post{Platform: "youtube", Title: "Piano", Text: "Música calma"})
+	if !strings.Contains(body, "não há transcrição") || !strings.Contains(body, "não afirme o que o vídeo mostra") {
+		t.Errorf("o prompt deve pedir cautela com vídeos sem transcrição: %s", body)
+	}
+}

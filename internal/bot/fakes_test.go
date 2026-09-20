@@ -129,9 +129,10 @@ func (hn *harness) expect(text, contains string) {
 
 // fakeAI: resumo = "Resumo: "+texto; embeddings em 2 dimensões (comida, esporte).
 type fakeAI struct {
-	down   bool
-	audio  ai.Analysis // resposta de AnalyzeAudio
-	embeds *int        // se não nil, conta as chamadas de Embed
+	noAudio bool // só AnalyzeAudio falha
+	down    bool
+	audio   ai.Analysis // resposta de AnalyzeAudio
+	embeds  *int        // se não nil, conta as chamadas de Embed
 }
 
 func (f fakeAI) AnalyzePost(_ context.Context, p ai.Post) (ai.Analysis, error) {
@@ -154,7 +155,7 @@ func (f fakeAI) AnalyzeTranscript(_ context.Context, t string) (ai.Analysis, err
 func (fakeAI) Enabled() bool { return true }
 
 func (f fakeAI) AnalyzeAudio(context.Context, []byte, string) (ai.Analysis, error) {
-	if f.down {
+	if f.down || f.noAudio {
 		return ai.Analysis{}, errors.New("fora do ar")
 	}
 	return f.audio, nil
@@ -190,6 +191,15 @@ type fakeExtractor struct {
 	calls        int
 	segments     int  // 0 = um só
 	startedFirst bool // erro só depois de começar o download (o vídeo existe, mas falhou)
+
+	meta      extract.Meta // resposta de Metadata (vazia = sem metadados úteis)
+	metaErr   error
+	metaCalls int
+}
+
+func (f *fakeExtractor) Metadata(context.Context, *url.URL) (extract.Meta, error) {
+	f.metaCalls++
+	return f.meta, f.metaErr
 }
 
 func (*fakeExtractor) Supports(u *url.URL) bool {
@@ -273,3 +283,14 @@ func (hn *harness) seed(host, note string, n int) []int64 {
 func itemsIn(text string) int { return strings.Count(text, "\n\n#") }
 
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+
+// postSpy guarda o último Post enviado a AnalyzePost.
+type postSpy struct {
+	fakeAI
+	seen *ai.Post
+}
+
+func (p postSpy) AnalyzePost(ctx context.Context, post ai.Post) (ai.Analysis, error) {
+	*p.seen = post
+	return p.fakeAI.AnalyzePost(ctx, post)
+}

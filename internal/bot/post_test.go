@@ -5,7 +5,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/MarcosAAlbanoJunior/guardei/internal/ai"
 	"github.com/MarcosAAlbanoJunior/guardei/internal/page"
 )
 
@@ -54,8 +53,8 @@ func TestPostFallbacksAskForDescription(t *testing.T) {
 		{"bloqueado", &fakePages{err: page.ErrBlocked}, fakeAI{}, "bloqueou o acesso ou pede login"},
 		{"sem texto", &fakePages{err: page.ErrNoContent}, fakeAI{}, "não tem texto aproveitável"},
 		{"erro de rede", &fakePages{err: errors.New("timeout")}, fakeAI{}, "não consegui abrir a página"},
-		{"tela de login", &fakePages{pg: page.Page{Text: "ENTRE OU CADASTRE-SE para ver mais"}}, fakeAI{}, "não descreve o post"},
-		{"IA caiu", &fakePages{pg: page.Page{Text: "texto do post com conteúdo suficiente"}}, fakeAI{down: true}, "a IA não conseguiu analisar o post"},
+		{"tela de login", &fakePages{pg: page.Page{Text: "ENTRE OU CADASTRE-SE para ver mais"}}, fakeAI{}, "não descreve o conteúdo"},
+		{"IA caiu", &fakePages{pg: page.Page{Text: "texto do post com conteúdo suficiente"}}, fakeAI{down: true}, "a IA não conseguiu analisar o conteúdo"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -73,17 +72,6 @@ func TestVideoFailureMentionsBothReasons(t *testing.T) {
 	hn := withPages(t, fakeAI{audio: speech()}, pg)
 	hn.h.Extractor = &fakeExtractor{err: errors.New("yt-dlp quebrou")}
 	hn.expect("https://youtu.be/abc", "não consegui baixar o áudio; o site bloqueou")
-}
-
-func TestVideoLimitsDoNotFallBackToPage(t *testing.T) {
-	// vídeo longo, ao vivo e sem fala têm o motivo próprio; não vale ler a página
-	pg := &fakePages{pg: page.Page{Text: "descrição comprida do vídeo no youtube com bastante texto"}}
-	hn := withPages(t, fakeAI{audio: ai.Analysis{HasSpeech: false}}, pg)
-	hn.h.Extractor = &fakeExtractor{}
-	hn.expect("https://youtu.be/abc", "não tem fala")
-	if pg.calls != 0 {
-		t.Fatal("não deveria ler a página")
-	}
 }
 
 func TestNoPostReadingWithoutAI(t *testing.T) {

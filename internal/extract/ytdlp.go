@@ -82,10 +82,11 @@ func (y *YtDlp) Audio(ctx context.Context, u *url.URL, started func()) (AudioFil
 		return AudioFile{}, ctx.Err()
 	}
 
-	title, dur, err := y.probe(ctx, u.String())
+	meta, err := y.probe(ctx, u.String())
 	if err != nil {
 		return AudioFile{}, err
 	}
+	title, dur := meta.Title, meta.Duration
 	if dur > y.MaxDuration {
 		return AudioFile{}, &TooLongError{Duration: dur, Max: y.MaxDuration}
 	}
@@ -176,27 +177,64 @@ func (y *YtDlp) segments(ctx context.Context, dir string, dur time.Duration) ([]
 	return segs, nil
 }
 
-func (y *YtDlp) probe(ctx context.Context, rawURL string) (title string, dur time.Duration, err error) {
+// fetchMeta lê os metadados do link com uma chamada ao yt-dlp, sem baixar o vídeo.
+func (y *YtDlp) fetchMeta(ctx context.Context, rawURL string) (Meta, bool, error) {
 	ctx, cancel := context.WithTimeout(ctx, probeTimeout)
 	defer cancel()
 	out, err := y.run(ctx, y.Path, "--no-playlist", "--no-warnings",
-		"--print", "%(.{duration,title,is_live})j", "--", rawURL)
+		"--print", "%(.{duration,title,is_live,description,uploader,tags,categories})j", "--", rawURL)
 	if err != nil {
-		return "", 0, fmt.Errorf("yt-dlp: %w: %s", err, lastLine(out))
+		return Meta{}, false, fmt.Errorf("yt-dlp: %w: %s", err, lastLine(out))
 	}
-	var meta struct {
-		Duration *float64 `json:"duration"`
-		Title    string   `json:"title"`
-		IsLive   bool     `json:"is_live"`
+	var raw struct {
+		Duration    *float64 `json:"duration"`
+		Title       string   `json:"title"`
+		IsLive      bool     `json:"is_live"`
+		Description string   `json:"description"`
+		Uploader    string   `json:"uploader"`
+		Tags        []string `json:"tags"`
+		Categories  []string `json:"categories"`
 	}
 	// A saída pode ter linhas extras antes do JSON; usa a última linha.
-	if err := json.Unmarshal([]byte(lastLine(out)), &meta); err != nil {
-		return "", 0, fmt.Errorf("metadados ilegíveis: %w", err)
+	if err := json.Unmarshal([]byte(lastLine(out)), &raw); err != nil {
+		return Meta{}, false, fmt.Errorf("metadados ilegíveis: %w", err)
 	}
-	if meta.IsLive || meta.Duration == nil || *meta.Duration <= 0 {
-		return "", 0, ErrNoDuration
+	m := Meta{
+		Title:       strings.TrimSpace(raw.Title),
+		Description: strings.TrimSpace(raw.Description),
+		Uploader:    strings.TrimSpace(raw.Uploader),
+		Tags:        raw.Tags,
+		Categories:  raw.Categories,
 	}
-	return strings.TrimSpace(meta.Title), time.Duration(*meta.Duration * float64(time.Second)), nil
+	hasDuration := !raw.IsLive && raw.Duration != nil && *raw.Duration > 0
+	if hasDuration {
+		m.Duration = time.Duration(*raw.Duration * float64(time.Second))
+	}
+	return m, hasDuration, nil
+}
+
+// probe devolve os metadados e exige uma duração conhecida (não é ao vivo).
+func (y *YtDlp) probe(ctx context.Context, rawURL string) (Meta, error) {
+	m, hasDuration, err := y.fetchMeta(ctx, rawURL)
+	if err != nil {
+		return Meta{}, err
+	}
+	if !hasDuration {
+		return Meta{}, ErrNoDuration
+	}
+	return m, nil
+}
+
+// Metadata lê título, descrição, canal e tags, inclusive de transmissões ao vivo.
+func (y *YtDlp) Metadata(ctx context.Context, u *url.URL) (Meta, error) {
+	select {
+	case y.sem <- struct{}{}:
+		defer func() { <-y.sem }()
+	case <-ctx.Done():
+		return Meta{}, ctx.Err()
+	}
+	m, _, err := y.fetchMeta(ctx, u.String())
+	return m, err
 }
 
 // SelfUpdate roda `yt-dlp -U`: ele quebra sempre que uma plataforma muda.

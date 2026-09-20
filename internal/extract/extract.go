@@ -18,6 +18,17 @@ type AudioFile struct {
 	Title    string
 }
 
+// Meta são os metadados públicos de um vídeo: o que resta quando não há áudio
+// aproveitável (sem fala, longo demais, ao vivo).
+type Meta struct {
+	Title       string
+	Description string
+	Uploader    string
+	Tags        []string
+	Categories  []string
+	Duration    time.Duration // zero se desconhecida (ao vivo)
+}
+
 // Extractor baixa o áudio de vídeos de uma plataforma.
 type Extractor interface {
 	// Supports diz se este extrator sabe tratar o link.
@@ -26,6 +37,8 @@ type Extractor interface {
 	// tem vídeo dentro do limite e o download vai começar, para o bot avisar o
 	// usuário só então: um post de texto no X nunca chega aqui.
 	Audio(ctx context.Context, u *url.URL, started func()) (AudioFile, error)
+	// Metadata lê título, descrição, canal e tags do vídeo, sem baixar nada.
+	Metadata(ctx context.Context, u *url.URL) (Meta, error)
 }
 
 var (
@@ -47,6 +60,11 @@ type Nop struct{}
 
 // Supports sempre devolve falso: não há extrator.
 func (Nop) Supports(*url.URL) bool { return false }
+
+// Metadata sempre falha: não há extrator.
+func (Nop) Metadata(context.Context, *url.URL) (Meta, error) {
+	return Meta{}, errors.New("extração indisponível")
+}
 
 // Audio sempre falha: não há extrator.
 func (Nop) Audio(context.Context, *url.URL, func()) (AudioFile, error) {
